@@ -7,7 +7,7 @@ import com.pmvault.core.PasswordGenerator
 import com.pmvault.core.Record
 import com.pmvault.core.SyncClient
 import com.pmvault.core.SyncException
-import com.pmvault.core.VaultCipher
+import com.pmvault.core.VaultKey
 import com.pmvault.core.VaultPayload
 import com.pmvault.core.VaultState
 import java.io.File
@@ -28,6 +28,12 @@ class VaultRepository(private val context: Context) {
     /** 仅在内存中保存主密钥；锁屏/退出即清除。 */
     var password: String? = null
         private set
+
+    /**
+     * 已派生的库密钥（含 PBKDF2 的盐与迭代数），会话内复用。
+     * 复用它之后每次保存只做一次 AES-GCM —— 这是 Android 端最大的性能改善。
+     */
+    private var vaultKey: VaultKey? = null
 
     var state: VaultState? = null
         private set
@@ -50,6 +56,7 @@ class VaultRepository(private val context: Context) {
             deviceId = deviceId,
         )
         this.password = password
+        this.vaultKey = VaultKey.create(password)
         this.state = created
         persist()
         return created
@@ -57,23 +64,29 @@ class VaultRepository(private val context: Context) {
 
     fun unlock(password: String): VaultState {
         val text = vaultFile.readText(Charsets.UTF_8)
-        val payload = VaultPayload.parse(VaultCipher.decrypt(password, text))
-        val opened = VaultState.fromPayload(payload, deviceId)
+        val (material, plaintext) = VaultKey.unlock(password, text)
+        val opened = VaultState.fromPayload(VaultPayload.parse(plaintext), deviceId)
         this.password = password
+        this.vaultKey = material
         this.state = opened
         return opened
     }
 
     fun lock() {
         password = null
+        vaultKey = null
         state = null
     }
 
+    /** 写盘：复用会话内的 [vaultKey]，只做一次 AES-GCM。 */
     fun persist() {
-        val key = password ?: throw IllegalStateException("尚未解锁")
+        val material = vaultKey ?: throw IllegalStateException("尚未解锁")
         val current = state ?: throw IllegalStateException("尚未解锁")
-        vaultFile.writeText(VaultCipher(key).encrypt(current.toPayload().toText()), Charsets.UTF_8)
+        vaultFile.writeText(material.encrypt(current.toPayload().toText()), Charsets.UTF_8)
     }
+
+    /** 库版本号；每次写操作都会 +1，用来判断历史密码缓存是否失效。 */
+    fun revision(): Long = state?.rev ?: 0L
 
     fun addEntry(
         name: String,
@@ -212,11 +225,13 @@ class VaultRepository(private val context: Context) {
     fun importFromHost(pairingText: String, password: String): VaultState {
         val pairing = PairingInfo.parse(pairingText)
         val blob = SyncClient(pairing).fetchVault()
-        val payload = VaultPayload.parse(VaultCipher.decrypt(password, blob))
+        // 桌面端的盐与本机不同，这里必须按它文件头里的参数派生一次
+        val (material, plaintext) = VaultKey.unlock(password, blob)
 
         vaultFile.writeText(blob, Charsets.UTF_8)
         this.password = password
-        val opened = VaultState.fromPayload(payload, deviceId)
+        this.vaultKey = material
+        val opened = VaultState.fromPayload(VaultPayload.parse(plaintext), deviceId)
         this.state = opened
         return opened
     }
@@ -234,12 +249,18 @@ class VaultRepository(private val context: Context) {
             throw SyncException("对方的密码库与本机不是同一个（vault_id 不一致）")
         }
 
-        val localBlob = VaultCipher(key).encrypt(current.toPayload().toText())
+        val material = vaultKey ?: throw IllegalStateException("尚未解锁")
+        val localBlob = material.encrypt(current.toPayload().toText())
         val mergedBlob = SyncClient(pairing).sync(localBlob)
-        val mergedPayload = VaultPayload.parse(VaultCipher.decrypt(key, mergedBlob))
+
+        // 主机返回的密文用的是**主机的盐**，所以要按它的文件头重新派生一次；
+        // 之后本机沿用这套参数，后续保存不再有 PBKDF2 开销。
+        val (mergedKey, mergedText) = VaultKey.unlock(key, mergedBlob)
+        val mergedPayload = VaultPayload.parse(mergedText)
 
         val conflicts = current.mergeRemote(mergedPayload)
         vaultFile.writeText(mergedBlob, Charsets.UTF_8)
+        vaultKey = mergedKey
         state = VaultState.fromPayload(mergedPayload, deviceId)
         return conflicts
     }

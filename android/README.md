@@ -24,6 +24,8 @@ android/
 
 - `Crypto`：SHA-256 / HMAC / **手写 PBKDF2-HMAC-SHA256** / **HKDF(RFC 5869)** / **UUIDv5(RFC 4122)**（手写是为了保证与 Python 对非 ASCII 口令的字节处理完全一致）
 - `VaultCipher`：v3 加密容器（AES-256-GCM，注意磁盘布局是 **tag || ciphertext**，与 JCE 默认相反）
+- `VaultKey`：已派生的库密钥（密钥 + 盐 + 迭代数），会话内复用 —— 保存只做 AES-GCM，
+  不再每次重跑 60 万次 PBKDF2；每次加密换新 nonce
 - `Merge`：三方合并、冲突保留、删除 vs 编辑复活、确定性 `uuid5` 副本 ID
 - `Hlc`：混合逻辑时钟
 - `SyncProtocol` / `SyncClient`：HKDF 派生认证密钥、HMAC 签名、响应签名校验、HTTP 同步

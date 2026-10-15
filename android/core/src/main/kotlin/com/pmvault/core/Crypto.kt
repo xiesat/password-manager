@@ -56,16 +56,20 @@ object Crypto {
     fun pbkdf2Sha256(password: ByteArray, salt: ByteArray, iterations: Int, length: Int): ByteArray {
         val out = ByteArray(length)
         val blocks = (length + 31) / 32
+        // 整次派生只建一个 Mac 并复用：Mac.doFinal 完成后会自动 reset 回 init 状态，
+        // 与每轮新建 Mac 的结果完全一致，但省掉了 iterations 次 provider 查找与对象分配。
+        val mac = Mac.getInstance("HmacSHA256")
+        mac.init(SecretKeySpec(password, "HmacSHA256"))
         var offset = 0
         for (block in 1..blocks) {
             val blockIndex = byteArrayOf(
                 (block ushr 24).toByte(), (block ushr 16).toByte(),
                 (block ushr 8).toByte(), block.toByte(),
             )
-            var u = hmacSha256(password, salt + blockIndex)
+            var u = mac.doFinal(salt + blockIndex)
             val acc = u.copyOf()
             for (i in 2..iterations) {
-                u = hmacSha256(password, u)
+                u = mac.doFinal(u)
                 for (j in acc.indices) acc[j] = (acc[j].toInt() xor u[j].toInt()).toByte()
             }
             val take = minOf(32, length - offset)

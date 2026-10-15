@@ -42,6 +42,11 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
 
     private var historyJob: Job? = null
 
+    // 历史密码缓存：同一条记录 + 库版本没变时直接复用，避免每次打开都重算 20 万次 PBKDF2
+    private var cachedHistoryName: String? = null
+    private var cachedHistoryRev: Long = -1L
+    private var cachedHistory: List<VaultRepository.HistoryEntry> = emptyList()
+
     val vaultId: String? get() = repository.state?.vaultId
     val deviceId: String get() = repository.deviceId
 
@@ -138,15 +143,32 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
      * 每条历史都要跑一次 20 万次 PBKDF2，所以必须离开主线程，并逐条汇报进度。
      */
     fun loadHistory(name: String) {
+        val revision = repository.revision()
+
+        // 命中缓存：库没改过就直接用上次算好的结果
+        if (cachedHistoryName == name && cachedHistoryRev == revision) {
+            historyJob?.cancel()
+            historyJob = null
+            historyEntries = cachedHistory
+            historyTotal = cachedHistory.size
+            historyDone = cachedHistory.size
+            historyLoading = false
+            return
+        }
+
         historyJob?.cancel()
         val rows = repository.rawHistory(name)
         historyEntries = emptyList()
         historyTotal = rows.size
         historyDone = 0
         if (rows.isEmpty()) {
+            cachedHistoryName = name
+            cachedHistoryRev = revision
+            cachedHistory = emptyList()
             historyLoading = false
             return
         }
+
         historyLoading = true
         historyJob = viewModelScope.launch {
             val collected = mutableListOf<VaultRepository.HistoryEntry>()
@@ -158,6 +180,9 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
                 historyEntries = collected.toList()
                 historyDone = position + 1
             }
+            cachedHistoryName = name
+            cachedHistoryRev = revision
+            cachedHistory = collected.toList()
             historyLoading = false
         }
     }

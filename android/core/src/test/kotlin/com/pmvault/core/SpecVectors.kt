@@ -110,6 +110,46 @@ fun main(args: Array<String>) {
         check("header version", blob[4].toInt() == 3)
         check("header iterations", Crypto.bytesToInt(blob, 5) == 1234)
     }
+    run {
+        // 复用同一个 VaultKey 连续保存：不重跑 PBKDF2，但每次必须是新 nonce
+        val material = VaultKey.create("k", iterations = 1234)
+        val first = material.encrypt("同一段明文")
+        val second = material.encrypt("同一段明文")
+        check("reused key -> different nonce", first != second)
+        check("reused key decrypts first", VaultCipher.decrypt("k", first) == "同一段明文")
+        check("reused key decrypts second", VaultCipher.decrypt("k", second) == "同一段明文")
+        check("reused key keeps salt", VaultCipher.parse(first).salt.contentEquals(material.salt))
+        check("reused key keeps iterations", VaultCipher.parse(first).iterations == 1234)
+    }
+    run {
+        // 用 VaultKey 打开 Python 生成的库，再用解出的密钥重新加密：结构必须仍与 Python 兼容
+        val fixtureKey = File(root, "spec/fixtures/cross_language.key").readText(Charsets.UTF_8)
+        val fixtureToken = File(root, "spec/fixtures/cross_language.sk").readText(Charsets.UTF_8).trim()
+        val fixtureExpected = File(root, "spec/fixtures/cross_language.expected.json").readText(Charsets.UTF_8)
+        val (material, plaintext) = VaultKey.unlock(fixtureKey, fixtureToken)
+        check("unlock() reads fixture", plaintext == fixtureExpected)
+        check("unlock() keeps iterations", material.iterations == VaultCipher.parse(fixtureToken).iterations)
+        val reEncrypted = material.encrypt(plaintext)
+        val (again, roundTrip) = VaultKey.unlock(fixtureKey, reEncrypted)
+        check("re-encrypt with reused key", roundTrip == fixtureExpected)
+        check("re-encrypt keeps salt", again.salt.contentEquals(material.salt))
+    }
+    run {
+        // 手机端生成的夹具（会话内复用盐保存两次）也要能读回
+        val fixtureKey = File(root, "spec/fixtures/reused_key.key").readText(Charsets.UTF_8)
+        val blob = File(root, "spec/fixtures/reused_key.sk").readText(Charsets.UTF_8).trim()
+        val expected = File(root, "spec/fixtures/reused_key.expected.json").readText(Charsets.UTF_8)
+        val (_, plaintext) = VaultKey.unlock(fixtureKey, blob)
+        check("kotlin fixture opens", plaintext == expected)
+
+        val first = VaultCipher.parse(
+            File(root, "spec/fixtures/reused_key.first.sk").readText(Charsets.UTF_8).trim()
+        )
+        val second = VaultCipher.parse(blob)
+        check("kotlin fixture reuses salt", first.salt.contentEquals(second.salt))
+        check("kotlin fixture fresh nonce", !first.nonce.contentEquals(second.nonce))
+        check("kotlin fixture iterations", second.iterations == 200_000)
+    }
 
     println("== 5. HLC ==")
     run {
