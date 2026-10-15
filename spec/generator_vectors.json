@@ -54,5 +54,110 @@
       "symbol": true,
       "password": "2cF]cRI9Qb<d[5WjDLu7>W3z"
     }
+  ],
+  "rule_vectors": [
+    {
+      "rule": "12|True|True|True|True|AbC123xyz|v2",
+      "valid": true,
+      "length": 12,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": true,
+      "salt": "AbC123xyz",
+      "algorithm": "v2"
+    },
+    {
+      "rule": "16|True|True|True|True|Zz9Qq7Ww|v2",
+      "valid": true,
+      "length": 16,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": true,
+      "salt": "Zz9Qq7Ww",
+      "algorithm": "v2"
+    },
+    {
+      "rule": "8|True|True|True|False||v1",
+      "valid": true,
+      "length": 8,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": false,
+      "salt": "",
+      "algorithm": "v1"
+    },
+    {
+      "rule": "20|False|False|True|False|OnlyDigits1",
+      "valid": true,
+      "length": 20,
+      "lower": false,
+      "upper": false,
+      "digit": true,
+      "symbol": false,
+      "salt": "OnlyDigits1",
+      "algorithm": "v1"
+    },
+    {
+      "rule": "24|True|False|True|True|s1|v1",
+      "valid": true,
+      "length": 24,
+      "lower": true,
+      "upper": false,
+      "digit": true,
+      "symbol": true,
+      "salt": "s1",
+      "algorithm": "v1"
+    },
+    {
+      "rule": "bad-rule",
+      "valid": false
+    },
+    {
+      "rule": "3|True|True|True|True|salt|v2",
+      "valid": false
+    },
+    {
+      "rule": "129|True|True|True|True|salt|v2",
+      "valid": false
+    },
+    {
+      "rule": "12|True|True|True|True|salt|v9",
+      "valid": false
+    },
+    {
+      "rule": "abc|True|True|True|True|salt|v2",
+      "valid": false
+    },
+    {
+      "rule": "16|True|True|True|True|salt",
+      "valid": true,
+      "length": 16,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": true,
+      "salt": "salt",
+      "algorithm": "v1"
+    }
+  ],
+  "regenerate_vectors": [
+    {
+      "name": "Google",
+      "rule": "12|True|True|True|True|AbC123xyz|v2",
+      "password": "h[wa.tg|0D[w"
+    },
+    {
+      "name": "GitHub",
+      "rule": "20|False|False|True|False|OnlyDigits1|v2",
+      "password": "40612719010910781571"
+    },
+    {
+      "name": "招商银行",
+      "rule": "8|True|True|True|False|saltXYZ9|v2",
+      "password": "fqpIOjv9"
+    }
   ]
 }

@@ -114,6 +114,66 @@ class VaultRepository(private val context: Context) {
         return record
     }
 
+    /** 历史密码条目；密码由规则确定性还原得到。 */
+    data class HistoryEntry(val password: String, val count: String, val time: String)
+
+    /**
+     * 为已有主体**重新生成**密码：沿用原规则的长度与字符类型，换一个新盐。
+     * 与桌面端 generate_new_password_for_subject 语义一致（次数 +1、旧密码写入历史）。
+     */
+    fun regenerate(index: Int): Record {
+        val current = state ?: throw IllegalStateException("尚未解锁")
+        if (index < 0 || index >= current.records.size) throw IllegalArgumentException("记录不存在")
+        val item = current.records[index]
+        val name = item["name"] as? String ?: ""
+
+        val spec = PasswordGenerator.parseRule(item["rule"] as? String ?: "")
+            ?: PasswordGenerator.parseRule(PasswordGenerator.defaultRule())
+            ?: throw IllegalStateException("无法解析密码规则")
+
+        val generated = PasswordGenerator.generateV2(
+            name, spec.length, spec.lower, spec.upper, spec.digit, spec.symbol, null,
+        )
+        item["password"] = generated.first
+        item["rule"] = PasswordGenerator.buildRule(
+            spec.length, spec.lower, spec.upper, spec.digit, spec.symbol, generated.second,
+        )
+        val count = ((item["count"] as? String)?.toIntOrNull() ?: 0) + 1
+        item["count"] = count.toString()
+        item["updated_at"] = timestamp()
+        item["hlc"] = current.nextHlc()
+
+        addHistory(name, count.toString(), item["rule"] as? String ?: "")
+        current.rev += 1
+        persist()
+        return item
+    }
+
+    /** 某个主体的历史密码；无法还原的旧格式条目会被跳过。 */
+    fun history(name: String): List<HistoryEntry> {
+        val current = state ?: return emptyList()
+        val entries = current.history[name] ?: return emptyList()
+        val result = mutableListOf<HistoryEntry>()
+        for (entry in entries) {
+            val row = entry as? List<Any?> ?: continue
+            if (row.size < 2) continue
+            val count = row[0] as? String ?: continue
+            val rule = row[1] as? String ?: continue
+            val time = (row.getOrNull(2) as? String) ?: ""
+            val spec = PasswordGenerator.parseRule(rule) ?: continue
+            val restored = PasswordGenerator.regenerate(name, spec) ?: continue
+            result.add(HistoryEntry(restored, count, time))
+        }
+        return result
+    }
+
+    private fun addHistory(name: String, count: String, rule: String) {
+        val current = state ?: return
+        val entry: List<Any?> = listOf(count, rule, timestamp())
+        val existing: List<Any?> = current.history[name] ?: emptyList()
+        current.history[name] = listOf<Any?>(entry) + existing
+    }
+
     fun deleteEntries(indexes: List<Int>) {
         val current = state ?: throw IllegalStateException("尚未解锁")
         for (index in indexes.sortedDescending()) {

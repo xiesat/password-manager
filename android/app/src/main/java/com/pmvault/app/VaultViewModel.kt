@@ -97,6 +97,17 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
         }
     }
 
+    /** 重新生成某条记录的密码（次数 +1，旧密码进入历史）。 */
+    fun regenerate(index: Int) {
+        launchAction {
+            repository.regenerate(index)
+            "已重新生成密码"
+        }
+    }
+
+    /** 某条记录的历史密码（同步读取内存状态，无需协程）。 */
+    fun history(name: String): List<VaultRepository.HistoryEntry> = repository.history(name)
+
     fun delete(index: Int) {
         launchAction {
             repository.deleteEntries(listOf(index))

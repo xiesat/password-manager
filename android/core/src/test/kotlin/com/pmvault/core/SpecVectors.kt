@@ -193,6 +193,42 @@ fun main(args: Array<String>) {
         }
     }
 
+    println("== 9. 规则解析与历史密码还原（跨语言） ==")
+    run {
+        val vectors = JSONObject(File(root, "spec/generator_vectors.json").readText(Charsets.UTF_8))
+
+        val rules = vectors.getJSONArray("rule_vectors")
+        for (index in 0 until rules.length()) {
+            val entry = rules.getJSONObject(index)
+            val spec = PasswordGenerator.parseRule(entry.getString("rule"))
+            if (!entry.getBoolean("valid")) {
+                check("rule#" + index + " rejected", spec == null, entry.getString("rule"))
+            } else {
+                val matches = spec != null &&
+                    spec.length == entry.getInt("length") &&
+                    spec.lower == entry.getBoolean("lower") &&
+                    spec.upper == entry.getBoolean("upper") &&
+                    spec.digit == entry.getBoolean("digit") &&
+                    spec.symbol == entry.getBoolean("symbol") &&
+                    spec.salt == entry.getString("salt") &&
+                    spec.algorithm == entry.getString("algorithm")
+                check("rule#" + index, matches, entry.getString("rule"))
+            }
+        }
+
+        val regenerate = vectors.getJSONArray("regenerate_vectors")
+        for (index in 0 until regenerate.length()) {
+            val entry = regenerate.getJSONObject(index)
+            val spec = PasswordGenerator.parseRule(entry.getString("rule"))
+            val actual = if (spec == null) {
+                null
+            } else {
+                PasswordGenerator.regenerate(entry.getString("name"), spec)
+            }
+            check("regenerate#" + index, actual == entry.getString("password"), actual ?: "null")
+        }
+    }
+
     println("checks=" + checks + " failures=" + failures)
     println(if (failures == 0) "ALL KOTLIN CORE CHECKS PASSED" else "FAILURES: " + failures)
     if (failures > 0) kotlin.system.exitProcess(1)

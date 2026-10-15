@@ -13,6 +13,9 @@ object PasswordGenerator {
     const val STREAM_ITERATIONS = 200_000
     const val DEFAULT_SALT_LENGTH = 16
     const val DEFAULT_LENGTH = 16
+    const val DEFAULT_RULE_LENGTH = 16
+    const val MIN_LENGTH = 4
+    const val MAX_LENGTH = 128
 
     private const val LOWER = "abcdefghijklmnopqrstuvwxyz"
     private const val UPPER = "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
@@ -120,6 +123,75 @@ object PasswordGenerator {
     fun buildRule(
         length: Int, lower: Boolean, upper: Boolean, digit: Boolean, symbol: Boolean, salt: String,
     ): String = length.toString() + "|" + lower + "|" + upper + "|" + digit + "|" + symbol + "|" + salt + "|" + ALGORITHM_V2
+
+    /** 解析后的规则（与 Python model.parse_rule 等价）。 */
+    data class RuleSpec(
+        val length: Int,
+        val lower: Boolean,
+        val upper: Boolean,
+        val digit: Boolean,
+        val symbol: Boolean,
+        val salt: String,
+        val algorithm: String,
+    )
+
+    /**
+     * 解析规则字符串，兼容 5 段（v1 无盐）、6 段（v1 带盐）、7 段（带算法）三种历史格式。
+     * 无法识别时返回 null。
+     */
+    fun parseRule(rule: String): RuleSpec? {
+        val parts = rule.split("|")
+        val length: String
+        val salt: String
+        val algorithm: String
+        when {
+            parts.size == 5 -> {
+                length = parts[0]
+                salt = ""
+                algorithm = ALGORITHM_V1
+            }
+            parts.size == 6 -> {
+                length = parts[0]
+                salt = parts[5]
+                algorithm = ALGORITHM_V1
+            }
+            parts.size == 7 && (parts[6] == ALGORITHM_V1 || parts[6] == ALGORITHM_V2) -> {
+                length = parts[0]
+                salt = parts[5]
+                algorithm = parts[6]
+            }
+            else -> return null
+        }
+
+        val lengthInt = length.toIntOrNull() ?: return null
+        if (lengthInt < MIN_LENGTH || lengthInt > MAX_LENGTH) return null
+
+        return RuleSpec(
+            lengthInt,
+            parts[1] == "True",
+            parts[2] == "True",
+            parts[3] == "True",
+            parts[4] == "True",
+            salt,
+            algorithm,
+        )
+    }
+
+    /** 默认规则（与桌面端 _default_rule 一致：16 位、四类字符全开、随机盐）。 */
+    fun defaultRule(): String =
+        buildRule(DEFAULT_RULE_LENGTH, true, true, true, true, randomSalt())
+
+    /**
+     * 按规则**确定性还原**密码（历史密码就是靠这个显示的）。
+     * v1 规则或缺少盐的 v2 规则无法还原，返回 null。
+     */
+    fun regenerate(name: String, spec: RuleSpec): String? {
+        if (spec.algorithm != ALGORITHM_V2) return null
+        if (spec.salt.isEmpty()) return null
+        return generateV2(
+            name, spec.length, spec.lower, spec.upper, spec.digit, spec.symbol, spec.salt,
+        ).first
+    }
 
     /** 粗略强度评估，返回 0（空）或 1-5。 */
     fun estimateStrength(password: String): Int {

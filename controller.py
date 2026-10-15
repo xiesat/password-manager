@@ -37,6 +37,7 @@ class PasswordManagerController(QObject):
 
     # 主机侧完成一次同步后，从 HTTP 工作线程通知主线程刷新界面
     sync_applied = Signal(list)
+    sync_started = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
@@ -58,6 +59,7 @@ class PasswordManagerController(QObject):
 
         self._sync_server: sync_service.SyncServer | None = None
         self.sync_applied.connect(self._on_sync_applied)
+        self.sync_started.connect(self._on_sync_started)
 
         self._connect_signals()
         self.view.apply_theme(theme.load_setting())
@@ -149,6 +151,8 @@ class PasswordManagerController(QObject):
         if not self._session_key:
             raise ValueError("本机未解锁")
 
+        self.sync_started.emit(self.tr("正在处理来自其他设备的同步请求…"))
+
         remote = PasswordManagerModel()
         ok, message, _version = remote.detect_and_store(remote_blob)
         if not ok:
@@ -169,6 +173,9 @@ class PasswordManagerController(QObject):
         summary = [self._conflict_dict(c) for c in conflicts]
         self.sync_applied.emit(summary)
         return merged_blob, summary
+
+    def _on_sync_started(self, message: str) -> None:
+        self.view.notify_sync_started(message)
 
     def _on_sync_applied(self, summary: list) -> None:
         self._reload()

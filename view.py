@@ -786,10 +786,16 @@ class PasswordManagerView(QMainWindow):
         finally:
             self.sync_dialog = None
 
+    def notify_sync_started(self, message: str) -> None:
+        """主机侧开始处理同步请求（由控制器从工作线程触发）。"""
+        if self.sync_dialog is not None:
+            self.sync_dialog.notify_remote_sync_started(message)
+
     def notify_sync_applied(self, message: str) -> None:
         """主机侧完成一次同步后的提示（由控制器从工作线程触发）。"""
         if self.sync_dialog is not None:
             self.sync_dialog.append_log(message)
+            self.sync_dialog.notify_remote_sync_finished()
 
     def set_language_checked(self, language: str) -> None:
         for key, action in self._language_actions.items():

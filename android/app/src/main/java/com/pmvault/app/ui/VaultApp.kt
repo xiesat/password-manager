@@ -6,8 +6,10 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
@@ -145,6 +147,7 @@ private fun UnlockScreen(viewModel: VaultViewModel) {
 private fun VaultListScreen(viewModel: VaultViewModel, onAdd: () -> Unit) {
     val clipboard = LocalClipboardManager.current
     var reveal by remember { mutableStateOf(false) }
+    var detailIndex by remember { mutableStateOf(-1) }
 
     Column(modifier = Modifier.fillMaxSize()) {
         Row(
@@ -164,15 +167,15 @@ private fun VaultListScreen(viewModel: VaultViewModel, onAdd: () -> Unit) {
             itemsIndexed(viewModel.records) { index, record ->
                 val name = record["name"] as? String ?: ""
                 val password = record["password"] as? String ?: ""
+                val count = record["count"] as? String ?: "0"
                 ListItem(
+                    modifier = Modifier.clickable { detailIndex = index },
+                    overlineContent = { Text("第 " + count + " 次生成") },
                     headlineContent = { Text(name) },
                     supportingContent = { Text(if (reveal) password else "••••••••") },
                     trailingContent = {
-                        Row {
-                            TextButton(onClick = { clipboard.setText(AnnotatedString(password)) }) {
-                                Text("复制")
-                            }
-                            TextButton(onClick = { viewModel.delete(index) }) { Text("删除") }
+                        TextButton(onClick = { clipboard.setText(AnnotatedString(password)) }) {
+                            Text("复制")
                         }
                     },
                 )
@@ -180,6 +183,83 @@ private fun VaultListScreen(viewModel: VaultViewModel, onAdd: () -> Unit) {
             }
         }
     }
+
+    if (detailIndex in viewModel.records.indices) {
+        EntryDetailDialog(
+            viewModel = viewModel,
+            index = detailIndex,
+            onDelete = {
+                viewModel.delete(detailIndex)
+                detailIndex = -1
+            },
+            onDismiss = { detailIndex = -1 },
+        )
+    }
+}
+
+/** 点某一行打开：查看/复制密码、重新生成、查看历史密码、删除。 */
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun EntryDetailDialog(
+    viewModel: VaultViewModel,
+    index: Int,
+    onDelete: () -> Unit,
+    onDismiss: () -> Unit,
+) {
+    val clipboard = LocalClipboardManager.current
+    var showHistory by remember { mutableStateOf(false) }
+
+    val record = viewModel.records.getOrNull(index)
+    val name = record?.get("name") as? String ?: ""
+    val password = record?.get("password") as? String ?: ""
+    val count = record?.get("count") as? String ?: "0"
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(name) },
+        text = {
+            Column {
+                Text("密码：" + password)
+                Text("已生成次数：" + count, style = MaterialTheme.typography.bodySmall)
+                Spacer(Modifier.height(10.dp))
+                Row {
+                    Button(onClick = { clipboard.setText(AnnotatedString(password)) }) { Text("复制") }
+                    Spacer(Modifier.width(8.dp))
+                    OutlinedButton(onClick = { viewModel.regenerate(index) }) { Text("重新生成") }
+                }
+                Spacer(Modifier.height(8.dp))
+                OutlinedButton(onClick = { showHistory = !showHistory }) {
+                    Text(if (showHistory) "收起历史密码" else "查看历史密码")
+                }
+                if (showHistory) {
+                    val history = viewModel.history(name)
+                    Spacer(Modifier.height(6.dp))
+                    if (history.isEmpty()) {
+                        Text("暂无历史密码", style = MaterialTheme.typography.bodySmall)
+                    } else {
+                        LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
+                            itemsIndexed(history) { _, entry ->
+                                ListItem(
+                                    overlineContent = { Text("第 " + entry.count + " 次") },
+                                    headlineContent = { Text(entry.password) },
+                                    supportingContent = { Text(entry.time) },
+                                    trailingContent = {
+                                        TextButton(
+                                            onClick = {
+                                                clipboard.setText(AnnotatedString(entry.password))
+                                            },
+                                        ) { Text("复制") }
+                                    },
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        confirmButton = { TextButton(onClick = onDismiss) { Text("关闭") } },
+        dismissButton = { TextButton(onClick = onDelete) { Text("删除") } },
+    )
 }
 
 @Composable
@@ -275,32 +355,37 @@ private fun SyncDialog(viewModel: VaultViewModel, onDismiss: () -> Unit) {
                     visualTransformation = PasswordVisualTransformation(),
                     keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
                 )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    text = "· 本机已是同一个库 → 点「同步」\n· 新手机首次使用 → 点「从桌面端导入」",
-                    style = MaterialTheme.typography.bodySmall,
-                )
+                Spacer(Modifier.height(10.dp))
+                if (viewModel.busy) {
+                    LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
+                    Spacer(Modifier.height(6.dp))
+                    Text("正在与桌面端通信，请稍候…", style = MaterialTheme.typography.bodySmall)
+                } else if (viewModel.status.isNotEmpty()) {
+                    Text(viewModel.status, style = MaterialTheme.typography.bodyMedium)
+                } else {
+                    Text(
+                        text = "· 本机已是同一个库 → 点「同步」\n· 新手机首次使用 → 点「从桌面端导入」",
+                        style = MaterialTheme.typography.bodySmall,
+                    )
+                }
             }
         },
         confirmButton = {
             TextButton(
-                enabled = !viewModel.locked,
-                onClick = {
-                    viewModel.sync(pairingText)
-                    onDismiss()
-                },
+                enabled = !viewModel.locked && !viewModel.busy,
+                onClick = { viewModel.sync(pairingText) },
             ) { Text("同步") }
         },
         dismissButton = {
             Row {
-                TextButton(onClick = onDismiss) { Text("取消") }
+                TextButton(onClick = onDismiss) { Text("关闭") }
                 TextButton(
+                    enabled = !viewModel.busy,
                     onClick = {
                         if (viewModel.hasVault) {
                             confirmImport = true
                         } else {
                             viewModel.importFromHost(pairingText, password)
-                            onDismiss()
                         }
                     },
                 ) { Text("从桌面端导入") }
@@ -318,7 +403,6 @@ private fun SyncDialog(viewModel: VaultViewModel, onDismiss: () -> Unit) {
                     onClick = {
                         confirmImport = false
                         viewModel.importFromHost(pairingText, password)
-                        onDismiss()
                     },
                 ) { Text("确定导入") }
             },

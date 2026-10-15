@@ -192,6 +192,101 @@ def test_sync_dialog_constructs(controller):
         server.stop()
 
 
+def test_host_emits_sync_started(controller):
+    """主机开始处理请求时要通知界面显示进度。"""
+    messages: list[str] = []
+    controller.sync_started.connect(messages.append)
+
+    peer = make_peer(controller.model, "peer0001")
+    controller._apply_remote_blob(peer.encrypt_data(KEY, peer.prepare_export_data()))
+
+    assert messages, "主机侧未发出 sync_started"
+    assert "同步" in messages[0]
+
+
+def test_sync_dialog_runs_client_sync_in_background(app, controller, monkeypatch):
+    """客户端同步必须异步执行，并给出进度与完成提示。"""
+    from PySide6.QtTest import QTest
+    from PySide6.QtWidgets import QMessageBox
+
+    from sync_dialog import SyncDialog
+
+    server = sync_service.SyncServer(
+        apply_remote=lambda blob: (blob, []),
+        vault_id=controller.model.vault_id,
+        device_id=controller.model.device_id,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.start()
+    try:
+        calls: list[str] = []
+
+        def fake_sync(text: str):
+            calls.append(text)
+            return True, "同步完成", [{"kind": "both_modified", "name": "Site A"}]
+
+        shown: list[str] = []
+        monkeypatch.setattr(QMessageBox, "information", lambda *args, **kwargs: shown.append(args[2]))
+
+        dialog = SyncDialog(server, fake_sync)
+        dialog.paste_input.setPlainText("pairing-text")
+        dialog._client_sync()
+
+        # 同步进行中：进度可见、按钮禁用、界面未被阻塞
+        assert dialog.progress.isHidden() is False
+        assert dialog.connect_btn.isEnabled() is False
+
+        for _ in range(300):
+            QApplication.processEvents()
+            QTest.qWait(10)
+            if dialog._worker is None:
+                break
+
+        assert calls == ["pairing-text"]
+        assert dialog.progress.isHidden() is True
+        assert dialog.connect_btn.isEnabled() is True
+
+        log = dialog.log_view.toPlainText()
+        assert "同步完成" in log
+        assert "Site A" in log
+        assert shown == ["同步完成"]
+        dialog.close()
+    finally:
+        server.stop()
+
+
+def test_sync_dialog_refuses_close_while_syncing(controller):
+    from PySide6.QtGui import QCloseEvent
+
+    from sync_dialog import SyncDialog
+
+    server = sync_service.SyncServer(
+        apply_remote=lambda blob: (blob, []),
+        vault_id=controller.model.vault_id,
+        device_id=controller.model.device_id,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.start()
+    try:
+
+        class _FakeWorker:
+            def isRunning(self) -> bool:
+                return True
+
+        dialog = SyncDialog(server, lambda text: (True, "ok", []))
+        dialog._worker = _FakeWorker()  # type: ignore[assignment]
+
+        event = QCloseEvent()
+        dialog.closeEvent(event)
+
+        assert event.isAccepted() is False
+        assert "同步进行中" in dialog.log_view.toPlainText()
+    finally:
+        server.stop()
+
+
 def test_server_can_be_stopped_after_dialog(controller):
     server = sync_service.SyncServer(
         apply_remote=lambda blob: (blob, []),
