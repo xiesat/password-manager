@@ -22,7 +22,7 @@ def test_export_contains_plaintext_inside_encrypted_vault():
     m = PasswordManagerModel()
     m.add_or_update_subject("Google", length=16)
     data = m.prepare_export_data()
-    assert data["mainData"][0]["密码"] == m.main_data[0]["password"]
+    assert data["mainData"][0]["password"] == m.main_data[0]["password"]
     token = m.encrypt_data("k", data)
     assert m.main_data[0]["password"] not in token  # 密文里不应出现明文
 

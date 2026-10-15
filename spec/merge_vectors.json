@@ -1,0 +1,556 @@
+{
+  "cases": [
+    {
+      "base": {
+        "11111111111111111111111111111111": "4ff33dd3c683c83edd3c3eaa8c98e428",
+        "22222222222222222222222222222222": "5646eae4cbdf03bcc73e43442a3413be"
+      },
+      "base_records": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000100-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "p1",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        },
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000100-0000-aaaa0001",
+          "id": "22222222222222222222222222222222",
+          "name": "B",
+          "password": "p2",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "expected": {
+        "alive_passwords": [
+          "p1-new",
+          "p2-new"
+        ],
+        "base": {
+          "11111111111111111111111111111111": "a53615d45538c2cc6d736ee5920d1db3",
+          "22222222222222222222222222222222": "359fa74fbd0bb8abd55fb4554a925d3a"
+        },
+        "conflict_copy_ids": [],
+        "conflict_kinds": [],
+        "content_hash": "8ed0631ddbe69b705dc7e7f5e0fae418223b1852557a29cf3cb156419adf3a2f",
+        "deleted_ids": [],
+        "record_ids": [
+          "11111111111111111111111111111111",
+          "22222222222222222222222222222222"
+        ]
+      },
+      "local": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "p1-new",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "name": "disjoint_edits_both_kept",
+      "remote": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-bbbb0002",
+          "id": "22222222222222222222222222222222",
+          "name": "B",
+          "password": "p2-new",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "vault_id": "vault-0001"
+    },
+    {
+      "base": {
+        "11111111111111111111111111111111": "abef2e41de96f44bc22efce367b62afc"
+      },
+      "base_records": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000100-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "Google",
+          "password": "old",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "expected": {
+        "alive_passwords": [
+          "android-pw",
+          "desktop-pw"
+        ],
+        "base": {
+          "11111111111111111111111111111111": "2e0937a21129a66a1664dcd6618621e3",
+          "2e691270-5955-51e2-95f5-7a72ebc0a502": "9bcddafb41d41a92f9922939e7886a10"
+        },
+        "conflict_copy_ids": [
+          "2e691270-5955-51e2-95f5-7a72ebc0a502"
+        ],
+        "conflict_kinds": [
+          "both_modified"
+        ],
+        "content_hash": "7c96104a9ab9c7144bbe17f8b5fe334df3a7de0dc13264cd039883798d03b373",
+        "deleted_ids": [],
+        "record_ids": [
+          "11111111111111111111111111111111",
+          "2e691270-5955-51e2-95f5-7a72ebc0a502"
+        ]
+      },
+      "local": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "Google",
+          "password": "desktop-pw",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "name": "same_record_conflict_keeps_both",
+      "remote": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000300-0000-bbbb0002",
+          "id": "11111111111111111111111111111111",
+          "name": "Google",
+          "password": "android-pw",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "vault_id": "vault-0001"
+    },
+    {
+      "base": {
+        "11111111111111111111111111111111": "52f9a365f6205bd3a85f7b140f90bf75"
+      },
+      "base_records": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000100-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "old",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "expected": {
+        "alive_passwords": [
+          "same-new"
+        ],
+        "base": {
+          "11111111111111111111111111111111": "168de484b4a1852223184c649fe05711"
+        },
+        "conflict_copy_ids": [],
+        "conflict_kinds": [],
+        "content_hash": "b6f472a008c1e412cf4556f022f023e28b55089189c479743387c17c3b1df195",
+        "deleted_ids": [],
+        "record_ids": [
+          "11111111111111111111111111111111"
+        ]
+      },
+      "local": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "same-new",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "name": "identical_change_collapses",
+      "remote": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "same-new",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "vault_id": "vault-0001"
+    },
+    {
+      "base": {
+        "11111111111111111111111111111111": "c5c13a56090644cefbe5d70b00ccbe06"
+      },
+      "base_records": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000100-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "pw",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "expected": {
+        "alive_passwords": [],
+        "base": {
+          "11111111111111111111111111111111": "1b70b1c98c544d975c39049311ab1d24"
+        },
+        "conflict_copy_ids": [],
+        "conflict_kinds": [],
+        "content_hash": "322bb618e3d28c44a79b01f82b4636dfc2a5c9586bfd02ceb4d0e8b7075c8167",
+        "deleted_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "record_ids": [
+          "11111111111111111111111111111111"
+        ]
+      },
+      "local": [
+        {
+          "count": "0",
+          "deleted": true,
+          "hlc": "0000000000200-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "name": "delete_propagates",
+      "remote": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000100-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "pw",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "vault_id": "vault-0001"
+    },
+    {
+      "base": {
+        "11111111111111111111111111111111": "52f9a365f6205bd3a85f7b140f90bf75"
+      },
+      "base_records": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000100-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "old",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "expected": {
+        "alive_passwords": [
+          "edited-pw"
+        ],
+        "base": {
+          "11111111111111111111111111111111": "d82c1aea366d127abad7edf61f683086"
+        },
+        "conflict_copy_ids": [
+          null
+        ],
+        "conflict_kinds": [
+          "delete_vs_edit"
+        ],
+        "content_hash": "40bc8a7e3b9890c2ea951831d27b50e406408b36ba15b895fd9620bc06c517af",
+        "deleted_ids": [],
+        "record_ids": [
+          "11111111111111111111111111111111"
+        ]
+      },
+      "local": [
+        {
+          "count": "0",
+          "deleted": true,
+          "hlc": "0000000000900-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "name": "delete_vs_edit_resurrects",
+      "remote": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-bbbb0002",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "edited-pw",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "vault_id": "vault-0001"
+    },
+    {
+      "base": {
+        "11111111111111111111111111111111": "c5c13a56090644cefbe5d70b00ccbe06"
+      },
+      "base_records": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000100-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "pw",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "expected": {
+        "alive_passwords": [],
+        "base": {
+          "11111111111111111111111111111111": "1b70b1c98c544d975c39049311ab1d24"
+        },
+        "conflict_copy_ids": [],
+        "conflict_kinds": [],
+        "content_hash": "322bb618e3d28c44a79b01f82b4636dfc2a5c9586bfd02ceb4d0e8b7075c8167",
+        "deleted_ids": [
+          "11111111111111111111111111111111"
+        ],
+        "record_ids": [
+          "11111111111111111111111111111111"
+        ]
+      },
+      "local": [
+        {
+          "count": "0",
+          "deleted": true,
+          "hlc": "0000000000200-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "name": "both_deleted_collapses_to_one_tombstone",
+      "remote": [
+        {
+          "count": "0",
+          "deleted": true,
+          "hlc": "0000000000300-0000-bbbb0002",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "vault_id": "vault-0001"
+    },
+    {
+      "base": {},
+      "base_records": [],
+      "expected": {
+        "alive_passwords": [
+          "pa",
+          "pb"
+        ],
+        "base": {
+          "11111111111111111111111111111111": "46c53a1bb70714121c1bbdf59455c7d6",
+          "22222222222222222222222222222222": "49c0feb625ff10611c8ab76d2adcfadf"
+        },
+        "conflict_copy_ids": [],
+        "conflict_kinds": [],
+        "content_hash": "889303ec0bbef74590f8c960fa0c55d72e712d06da35fed2dc43b76d69533645",
+        "deleted_ids": [],
+        "record_ids": [
+          "11111111111111111111111111111111",
+          "22222222222222222222222222222222"
+        ]
+      },
+      "local": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "pa",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "name": "new_records_on_both_sides",
+      "remote": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-bbbb0002",
+          "id": "22222222222222222222222222222222",
+          "name": "B",
+          "password": "pb",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "vault_id": "vault-0001"
+    },
+    {
+      "base": {},
+      "base_records": [],
+      "expected": {
+        "alive_passwords": [
+          "pa",
+          "pb"
+        ],
+        "base": {
+          "11111111111111111111111111111111": "f599a55c077b9f00840259c1376d296f",
+          "ec9d85d5-b170-5537-8a58-f6abc016339f": "3e8402f34dbb4f719b256606563cd5c9"
+        },
+        "conflict_copy_ids": [
+          "ec9d85d5-b170-5537-8a58-f6abc016339f"
+        ],
+        "conflict_kinds": [
+          "both_modified"
+        ],
+        "content_hash": "3533cb38f755e392bad32993494c7b556c7e086bcd53d78203def63cc6aafab8",
+        "deleted_ids": [],
+        "record_ids": [
+          "11111111111111111111111111111111",
+          "ec9d85d5-b170-5537-8a58-f6abc016339f"
+        ]
+      },
+      "local": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-aaaa0001",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "pa",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "name": "missing_base_falls_back_to_conflict",
+      "remote": [
+        {
+          "count": "0",
+          "deleted": false,
+          "hlc": "0000000000200-0000-bbbb0002",
+          "id": "11111111111111111111111111111111",
+          "name": "A",
+          "password": "pb",
+          "rule": "16|True|True|True|True|saltABC|v2",
+          "updated_at": "2026-10-15 00:00:00"
+        }
+      ],
+      "vault_id": "vault-0001"
+    }
+  ],
+  "hash_namespace": "6f1a2b3c-4d5e-4f60-8a9b-0c1d2e3f4051",
+  "hash_vectors": [
+    {
+      "canonical": "{\"name\":\"Google\",\"password\":\"Ab3$kQ9m\",\"rule\":\"16|True|True|True|True|saltABC|v2\"}",
+      "payload": {
+        "name": "Google",
+        "password": "Ab3$kQ9m",
+        "rule": "16|True|True|True|True|saltABC|v2"
+      },
+      "record": {
+        "count": "0",
+        "deleted": false,
+        "hlc": "0000000000100-0000-aaaa0001",
+        "id": "11111111111111111111111111111111",
+        "name": "Google",
+        "password": "Ab3$kQ9m",
+        "rule": "16|True|True|True|True|saltABC|v2",
+        "updated_at": "2026-10-15 00:00:00"
+      },
+      "semantic_hash": "7741829d138ac643e6b703b775a9918e"
+    },
+    {
+      "canonical": "{\"name\":\"名字带 Unicode😀\",\"password\":\"p,w\\\"d\",\"rule\":\"16|True|True|True|True|saltABC|v2\"}",
+      "payload": {
+        "name": "名字带 Unicode😀",
+        "password": "p,w\"d",
+        "rule": "16|True|True|True|True|saltABC|v2"
+      },
+      "record": {
+        "count": "0",
+        "deleted": false,
+        "hlc": "0000000000100-0000-aaaa0001",
+        "id": "11111111111111111111111111111111",
+        "name": "名字带 Unicode😀",
+        "password": "p,w\"d",
+        "rule": "16|True|True|True|True|saltABC|v2",
+        "updated_at": "2026-10-15 00:00:00"
+      },
+      "semantic_hash": "0fdc28d22501138b0e2c18137974bcf1"
+    },
+    {
+      "canonical": "{\"deleted\":true}",
+      "payload": {
+        "deleted": true
+      },
+      "record": {
+        "count": "0",
+        "deleted": true,
+        "hlc": "0000000000100-0000-aaaa0001",
+        "id": "11111111111111111111111111111111",
+        "name": "任意",
+        "password": "",
+        "rule": "16|True|True|True|True|saltABC|v2",
+        "updated_at": "2026-10-15 00:00:00"
+      },
+      "semantic_hash": "1b70b1c98c544d975c39049311ab1d24"
+    },
+    {
+      "canonical": "{\"name\":\"同名字但计数不同\",\"password\":\"x\",\"rule\":\"16|True|True|True|True|saltABC|v2\"}",
+      "payload": {
+        "name": "同名字但计数不同",
+        "password": "x",
+        "rule": "16|True|True|True|True|saltABC|v2"
+      },
+      "record": {
+        "count": "0",
+        "deleted": false,
+        "hlc": "0000000000100-0000-aaaa0001",
+        "id": "11111111111111111111111111111111",
+        "name": "同名字但计数不同",
+        "password": "x",
+        "rule": "16|True|True|True|True|saltABC|v2",
+        "updated_at": "2026-10-15 00:00:00"
+      },
+      "semantic_hash": "df32cc3416dfb4e8354047383f39e4bc"
+    }
+  ],
+  "spec": "password-manager/merge",
+  "version": 1
+}

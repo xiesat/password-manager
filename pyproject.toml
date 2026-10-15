@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "password-manager"
-version = "0.3.0"
+version = "0.4.0"
 description = "本地加密密码管理器（PySide6 + AES-256-GCM）"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -24,6 +24,7 @@ password-manager = "main:main"
 py-modules = [
     "main", "applog", "storage", "encryption", "password_generator",
     "model", "controller", "view", "table_model", "theme", "io_exchange",
+    "hlc", "merge",
 ]
 
 [tool.pytest.ini_options]
@@ -48,5 +49,5 @@ warn_unused_ignores = true
 # 先对不依赖 GUI 的核心模块做类型检查（其余模块待后续补齐）
 files = [
     "storage.py", "applog.py", "encryption.py", "password_generator.py",
-    "model.py", "theme.py", "io_exchange.py",
+    "model.py", "theme.py", "io_exchange.py", "hlc.py", "merge.py",
 ]

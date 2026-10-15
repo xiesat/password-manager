@@ -111,6 +111,19 @@ set QT_QPA_PLATFORM=offscreen && pytest -q    # Windows
 
 ---
 
+## 多端同步（进行中）
+
+目标是 Windows 桌面 + Android 两端，**不依赖云服务器**，通过局域网直连互通。
+
+- **格式**：数据 schema v4（记录 `id` / `hlc` / 墓碑 / `sync_base`），见 [spec/VAULT_FORMAT.md](spec/VAULT_FORMAT.md)。
+- **冲突处理**：三方合并。两端离线各自修改后重连，
+  不同记录自动合并；**同一条记录被两端都改动时保留两个版本**并标记冲突，
+  绝不静默丢弃任何一端的修改；删除与编辑冲突时保留存活版本。
+- **收敛**：冲突副本 ID 由 `uuid5` 确定性派生，两端独立计算得到完全相同的结果。
+- **验证**：`spec/merge_vectors.json` 是黄金测试向量，桌面端已全部通过；Android 端将用同一份向量对齐。
+- **状态**：合并引擎与格式已就绪并测试（131 个用例）；局域网传输（HTTPS + mDNS + 扫码配对）
+  与 Android 客户端待实现。
+
 ## 项目结构
 
 ```
@@ -124,6 +137,9 @@ set QT_QPA_PLATFORM=offscreen && pytest -q    # Windows
 ├─ table_model.py           # QAbstractTableModel + 过滤/排序代理
 ├─ theme.py                 # 浅色/深色调色板与 QSS 生成
 ├─ io_exchange.py           # CSV 导入导出
+├─ hlc.py                   # 混合逻辑时钟（同步排序）
+├─ merge.py                 # 三方合并引擎（多端冲突保留）
+├─ spec/                    # 跨平台格式规范 + 黄金测试向量
 ├─ storage.py               # 原子写入、%APPDATA% 配置
 ├─ applog.py                # 滚动日志
 ├─ resources/style.qss      # 主题模板（占位符由 theme.py 替换）

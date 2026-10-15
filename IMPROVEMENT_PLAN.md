@@ -2,7 +2,7 @@
 
 > 项目：`D:\System Default\Documents\code\python\password_manager - 副本`
 > 技术栈：Python 3.10 – 3.14（本机 3.14.8） · PySide6 · PyCryptodome · PyInstaller
-> 状态：**v0.3.0 已发布（阶段 0–5 完成）**；剩余项见 §10
+> 状态：**v0.4.0（阶段 0–5 完成 + 多端同步基础 P1–P3 完成）**；Android 端与 LAN 传输待实现，见 §10
 > 详细附件：[OPTIMIZATION_PLAN.md](OPTIMIZATION_PLAN.md)（后端/安全）、[UI_OPTIMIZATION_PLAN.md](UI_OPTIMIZATION_PLAN.md)（界面）
 
 ---

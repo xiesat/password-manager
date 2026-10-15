@@ -121,7 +121,11 @@ class PasswordManagerController(QObject):
             return
 
         try:
-            encrypted = self.model.encrypt_data(key, {"mainData": [], "historyData": {}})
+            self.model.main_data = []
+            self.model.history_data = {}
+            self.model.tombstones = []
+            self.model.sync_base = {}
+            encrypted = self.model.encrypt_data(key, self.model.prepare_export_data())
             storage.atomic_write_text(path, encrypted)
         except Exception as exc:  # noqa: BLE001
             logger.exception("新建文件失败")

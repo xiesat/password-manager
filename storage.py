@@ -58,6 +58,19 @@ def read_text(path: str | os.PathLike[str], encoding: str = "utf-8") -> str:
         return handle.read()
 
 
+def get_device_id() -> str:
+    """返回本机稳定的短设备标识（首次调用时生成并持久化）。"""
+    import uuid
+
+    config = load_config()
+    device_id = str(config.get("device_id") or "")
+    if not device_id:
+        device_id = uuid.uuid4().hex[:8]
+        config["device_id"] = device_id
+        save_config(config)
+    return device_id
+
+
 def load_config() -> dict:
     """读取 config.json；不存在或损坏时返回空字典。"""
     path = app_config_dir() / CONFIG_FILE

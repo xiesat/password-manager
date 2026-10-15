@@ -3,14 +3,18 @@
 负责密码主体、历史记录、加解密文件、撤销/重做、备份与变更追踪。
 不依赖任何 GUI 组件，可独立单元测试。
 
-数据项结构：
+数据 schema v4（载荷内部版本，加密容器仍是 AES-256-GCM 的 v3）：
     {
-        "name": str,        # 主体名（同时是 v2 生成算法的输入）
-        "password": str,    # 明文密码；导出时随整个库一起被 AES-256-GCM 加密
-        "count": str,       # 生成次数
-        "rule": str,        # 生成规则，用于"重新生成"
-        "updated_at": str,  # 最近更新时间
+      "schema": 4,
+      "vault_id": "...", "device_id": "...", "rev": 42,
+      "mainData":   [ 记录 ... ],       # 可见记录
+      "tombstones": [ 墓碑记录 ... ],    # 已删除但仍需参与同步
+      "historyData": { 主体名: [[次数, 规则, 时间], ...] },
+      "sync_base":  { 记录ID: 语义哈希 }  # 上次同步时的基准，用于三方合并
     }
+
+记录结构：
+    { id, name, password, rule, count, updated_at, hlc, deleted }
 """
 
 from __future__ import annotations
@@ -19,8 +23,10 @@ import base64
 import copy
 import json
 import logging
+import uuid
 from datetime import datetime
 
+import merge
 from encryption import (
     AESCipher,
     LegacyAESCipher,
@@ -28,8 +34,9 @@ from encryption import (
     detect_format,
     validate_v2_outer,
 )
+from hlc import HLC
 from password_generator import ALGORITHM_V1, ALGORITHM_V2, PasswordGenerator
-from storage import atomic_write_text
+from storage import atomic_write_text, get_device_id
 
 logger = logging.getLogger(__name__)
 
@@ -39,6 +46,7 @@ MAX_LENGTH = 128
 RULE_ALGORITHMS = (ALGORITHM_V1, ALGORITHM_V2)
 DEFAULT_RULE_LENGTH = 16
 PLACEHOLDER_PASSWORD = "等待生成"
+PAYLOAD_SCHEMA = 4
 
 
 def _now() -> str:
@@ -102,6 +110,7 @@ class PasswordManagerModel:
         self.raw_decrypted_data = ""
 
         self.main_data: list[dict] = []
+        self.tombstones: list[dict] = []
         self.history_data: dict[str, list] = {}
 
         self.undo_stack: list[dict] = []
@@ -111,12 +120,133 @@ class PasswordManagerModel:
 
         self.pwd_generator = PasswordGenerator()
 
+        self.device_id = get_device_id()
+        self.hlc = HLC(self.device_id)
+        self.vault_id = self._new_id()
+        self.rev = 0
+        self.sync_base: dict[str, str] = {}
+
         self._dirty = False
         self._last_saved_state: dict | None = None
+
+    # ===================== 记录工具 =====================
+    @staticmethod
+    def _new_id() -> str:
+        return uuid.uuid4().hex
+
+    def all_records(self) -> list[dict]:
+        """可见记录 + 墓碑，用于同步/合并。"""
+        return [*self.main_data, *self.tombstones]
+
+    def content_hash(self) -> str:
+        """与顺序无关的内容指纹，用于验证两端是否收敛。"""
+        return merge.content_hash(self.all_records())
+
+    def _make_record(
+        self,
+        *,
+        name: str,
+        password: str,
+        rule: str,
+        count: str = "0",
+        record_id: str | None = None,
+        updated_at: str | None = None,
+        hlc: str | None = None,
+        deleted: bool = False,
+    ) -> dict:
+        return {
+            "id": record_id or self._new_id(),
+            "name": name,
+            "password": password,
+            "rule": rule,
+            "count": str(count),
+            "updated_at": updated_at or _now(),
+            "hlc": hlc or self.hlc.next(),
+            "deleted": bool(deleted),
+        }
+
+    def _default_rule(self) -> str:
+        return build_rule(
+            DEFAULT_RULE_LENGTH,
+            True,
+            True,
+            True,
+            True,
+            self.pwd_generator.random_salt(),
+            ALGORITHM_V2,
+        )
+
+    def _build_record(self, raw: dict) -> tuple[dict | None, bool]:
+        """把载荷中的一条记录转成内部结构。返回 (记录, 是否需要重新保存)。"""
+        if raw.get("id"):
+            record = {
+                "id": str(raw["id"]),
+                "name": str(raw.get("name", "")),
+                "password": str(raw.get("password", "")),
+                "rule": str(raw.get("rule", "")),
+                "count": str(raw.get("count", "0")),
+                "updated_at": str(raw.get("updated_at", "")),
+                "hlc": str(raw.get("hlc") or self.hlc.next()),
+                "deleted": bool(raw.get("deleted", False)),
+            }
+            return record, not raw.get("hlc")
+
+        # ---- 旧格式（schema < 4）：中文键名 ----
+        name = str(raw.get("密码生成主体", ""))
+        if not name:
+            return None, False
+        rule = str(raw.get("规则", ""))
+        count = str(raw.get("第n次生成的密码", "0"))
+        updated_at = str(raw.get("更新时间", ""))
+        password = str(raw.get("密码", ""))
+
+        spec = parse_rule(rule) if rule else None
+        if spec is None:
+            rule = self._default_rule()
+        elif spec["algorithm"] == ALGORITHM_V1 and not spec["salt"]:
+            result = self.pwd_generator.generate(
+                name,
+                length=spec["length"],
+                lower=spec["lower"],
+                upper=spec["upper"],
+                digit=spec["digit"],
+                symbol=spec["symbol"],
+                salt=None,
+                algorithm=ALGORITHM_V2,
+            )
+            rule = build_rule(
+                spec["length"],
+                spec["lower"],
+                spec["upper"],
+                spec["digit"],
+                spec["symbol"],
+                result["salt"],
+                ALGORITHM_V2,
+            )
+
+        if not password or password == PLACEHOLDER_PASSWORD:
+            spec = parse_rule(rule)
+            if spec is not None:
+                password = self.pwd_generator.generate(
+                    name,
+                    length=spec["length"],
+                    lower=spec["lower"],
+                    upper=spec["upper"],
+                    digit=spec["digit"],
+                    symbol=spec["symbol"],
+                    salt=spec["salt"] or None,
+                    algorithm=spec["algorithm"],
+                )["password"]
+
+        return (
+            self._make_record(name=name, password=password, rule=rule, count=count, updated_at=updated_at),
+            True,
+        )
 
     # ===================== 变更追踪 =====================
     def _mark_dirty(self) -> None:
         self._dirty = True
+        self.rev += 1
 
     def mark_clean(self) -> None:
         self._dirty = False
@@ -133,6 +263,8 @@ class PasswordManagerModel:
         return {
             "main": copy.deepcopy(self.main_data),
             "history": copy.deepcopy(self.history_data),
+            "tombstones": copy.deepcopy(self.tombstones),
+            "sync_base": copy.deepcopy(self.sync_base),
         }
 
     def _save_current_state_snapshot(self) -> None:
@@ -199,124 +331,65 @@ class PasswordManagerModel:
             return False
 
     def encrypt_data(self, user_key: str, data_dict: dict) -> str:
-        """把数据字典加密为 v3 文件内容。"""
+        """把数据字典加密为文件内容。"""
         if not user_key:
             raise ValueError("密钥不能为空")
         plaintext = json.dumps(data_dict, ensure_ascii=False)
         return VaultCipher(user_key).encrypt(plaintext)
 
     # ===================== 数据加载与导出 =====================
-    def _default_rule(self) -> str:
-        return build_rule(
-            DEFAULT_RULE_LENGTH,
-            True,
-            True,
-            True,
-            True,
-            self.pwd_generator.random_salt(),
-            ALGORITHM_V2,
-        )
-
     def load_data_from_decrypted_json(self) -> int:
         """解析解密后的 JSON，填充数据。返回需要重新保存的条目数。"""
-        data_dict = json.loads(self.raw_decrypted_data)
+        data = json.loads(self.raw_decrypted_data)
+
+        self.vault_id = str(data.get("vault_id") or self.vault_id or self._new_id())
+        self.rev = int(data.get("rev", 0) or 0)
+        self.sync_base = dict(data.get("sync_base", {}) or {})
+        self.history_data = data.get("historyData", {}) or {}
         self.main_data = []
-        self.history_data = data_dict.get("historyData", {}) or {}
+        self.tombstones = []
+
+        schema = data.get("schema")
+        needs_resave = schema != PAYLOAD_SCHEMA
 
         upgraded = 0
-        for item in data_dict.get("mainData", []):
-            name = item.get("密码生成主体", "")
-            count = str(item.get("第n次生成的密码", "0"))
-            rule_str = item.get("规则", "")
-            stored = item.get("密码", "")
-            updated_at = item.get("更新时间", "")
-            if not name:
+        for raw in data.get("mainData", []):
+            record, changed = self._build_record(raw)
+            if record is None:
                 continue
+            upgraded += 1 if changed else 0
+            if record["deleted"]:
+                self.tombstones.append(record)
+            else:
+                self.main_data.append(record)
 
-            spec = parse_rule(rule_str) if rule_str else None
-            if spec is None:
-                rule_str = self._default_rule()
-                upgraded += 1
-            elif spec["algorithm"] == ALGORITHM_V1 and not spec["salt"]:
-                result = self.pwd_generator.generate(
-                    name,
-                    length=spec["length"],
-                    lower=spec["lower"],
-                    upper=spec["upper"],
-                    digit=spec["digit"],
-                    symbol=spec["symbol"],
-                    salt=None,
-                    algorithm=ALGORITHM_V2,
-                )
-                rule_str = build_rule(
-                    spec["length"],
-                    spec["lower"],
-                    spec["upper"],
-                    spec["digit"],
-                    spec["symbol"],
-                    result["salt"],
-                    ALGORITHM_V2,
-                )
-                upgraded += 1
-
-            password = stored if stored and stored != PLACEHOLDER_PASSWORD else ""
-            if not password:
-                spec = parse_rule(rule_str)
-                if spec is not None:
-                    password = self.pwd_generator.generate(
-                        name,
-                        length=spec["length"],
-                        lower=spec["lower"],
-                        upper=spec["upper"],
-                        digit=spec["digit"],
-                        symbol=spec["symbol"],
-                        salt=spec["salt"] or None,
-                        algorithm=spec["algorithm"],
-                    )["password"]
-                else:
-                    password = self.pwd_generator.generate(
-                        name,
-                        length=DEFAULT_RULE_LENGTH,
-                        lower=True,
-                        upper=True,
-                        digit=True,
-                        symbol=True,
-                        salt=None,
-                        algorithm=ALGORITHM_V2,
-                    )["password"]
-
-            self.main_data.append(
-                {
-                    "name": name,
-                    "password": password,
-                    "count": count,
-                    "rule": rule_str,
-                    "updated_at": updated_at,
-                }
-            )
+        for raw in data.get("tombstones", []):
+            record, _changed = self._build_record(raw)
+            if record is not None:
+                record["deleted"] = True
+                self.tombstones.append(record)
 
         self.mark_clean()
-        if upgraded:
-            logger.info("%d 条规则被补全/升级，需要重新保存", upgraded)
+        if needs_resave or upgraded:
+            logger.info("数据已迁移/修复（需要重新保存）：schema=%s upgraded=%d", schema, upgraded)
             self._dirty = True
-        return upgraded
+        return max(upgraded, 1 if needs_resave else 0)
 
     def prepare_export_data(self) -> dict:
-        """准备导出数据；密码随整个库一起被 AES-256-GCM 加密后落盘。"""
-        export_main = [
-            {
-                "密码生成主体": item["name"],
-                "密码": item["password"],
-                "第n次生成的密码": item["count"],
-                "规则": item["rule"],
-                "更新时间": item.get("updated_at", ""),
-            }
-            for item in self.main_data
-        ]
-        return {"mainData": export_main, "historyData": self.history_data}
+        """构造 schema 4 载荷（密码随整个库一起被 AES-256-GCM 加密）。"""
+        return {
+            "schema": PAYLOAD_SCHEMA,
+            "vault_id": self.vault_id,
+            "device_id": self.device_id,
+            "rev": self.rev,
+            "mainData": [dict(r) for r in self.main_data],
+            "tombstones": [dict(r) for r in self.tombstones],
+            "historyData": self.history_data,
+            "sync_base": dict(self.sync_base),
+        }
 
     def export_rows(self) -> list[dict]:
-        """导出为通用行结构（供 CSV 等使用）。"""
+        """导出为通用行结构（供 UI / CSV 使用，仅可见记录）。"""
         return [
             {
                 "name": item["name"],
@@ -343,10 +416,7 @@ class PasswordManagerModel:
         count: str = "0",
         updated_at: str | None = None,
     ) -> dict:
-        """新增（或同名覆盖）主体。
-
-        password 为空时按规则生成；传入 password 时直接采用（用于导入）。
-        """
+        """新增（或同名覆盖）主体。password 为空时按规则生成。"""
         if password:
             used_password = password
             used_rule = rule or build_rule(
@@ -372,13 +442,15 @@ class PasswordManagerModel:
             used_password = result["password"]
             used_rule = rule or build_rule(length, lower, upper, digit, symbol, result["salt"], ALGORITHM_V2)
 
-        new_item = {
-            "name": name,
-            "password": used_password,
-            "count": str(count),
-            "rule": used_rule,
-            "updated_at": updated_at or _now(),
-        }
+        existing_id = next((item["id"] for item in self.main_data if item["name"] == name), None)
+        new_item = self._make_record(
+            name=name,
+            password=used_password,
+            rule=used_rule,
+            count=count,
+            record_id=existing_id,
+            updated_at=updated_at,
+        )
 
         for index, item in enumerate(self.main_data):
             if item["name"] == name:
@@ -392,11 +464,23 @@ class PasswordManagerModel:
         return new_item
 
     def delete_subjects(self, indexes: list[int]) -> list[str]:
-        """按索引批量删除，返回被删除的主体名列表。"""
+        """按索引批量删除（生成墓碑），返回被删除的主体名列表。"""
         valid = sorted({i for i in indexes if 0 <= i < len(self.main_data)})
-        removed = [self.main_data[i]["name"] for i in valid]
+        removed: list[str] = []
         for index in reversed(valid):
-            del self.main_data[index]
+            item = self.main_data.pop(index)
+            removed.append(item["name"])
+            self.tombstones.append(
+                self._make_record(
+                    name=item["name"],
+                    password="",
+                    rule="",
+                    count=item.get("count", "0"),
+                    record_id=item["id"],
+                    deleted=True,
+                )
+            )
+        removed.reverse()
         if removed:
             self._mark_dirty()
             self._save_state()
@@ -436,6 +520,7 @@ class PasswordManagerModel:
         )
         item["count"] = str(int(item["count"]) + 1)
         item["updated_at"] = _now()
+        item["hlc"] = self.hlc.next()
 
         self._add_to_history(item["name"], item["count"], item["rule"])
         self._mark_dirty()
@@ -443,7 +528,7 @@ class PasswordManagerModel:
         return item["password"], item["count"]
 
     def reorder_subjects(self, names_in_order: list[str]) -> None:
-        """按给定名称顺序重排主体（供 UI 拖拽排序调用）。"""
+        """按给定名称顺序重排主体（仅影响本机显示顺序，不参与同步）。"""
         by_name = {item["name"]: item for item in self.main_data}
         ordered = [by_name[name] for name in names_in_order if name in by_name]
         if len(ordered) != len(self.main_data):
@@ -454,10 +539,53 @@ class PasswordManagerModel:
         self._save_state()
 
     def clear_all_data(self) -> None:
+        """清空：可见记录转为墓碑，历史清空。"""
+        for item in self.main_data:
+            self.tombstones.append(
+                self._make_record(
+                    name=item["name"],
+                    password="",
+                    rule="",
+                    count=item.get("count", "0"),
+                    record_id=item["id"],
+                    deleted=True,
+                )
+            )
         self.main_data = []
         self.history_data = {}
         self._mark_dirty()
         self._save_state()
+
+    # ===================== 同步/合并 =====================
+    def _records_from_payload(self, payload: dict) -> list[dict]:
+        records: list[dict] = []
+        for raw in payload.get("mainData", []) or []:
+            record, _ = self._build_record(raw)
+            if record is not None:
+                records.append(record)
+        for raw in payload.get("tombstones", []) or []:
+            record, _ = self._build_record(raw)
+            if record is not None:
+                record["deleted"] = True
+                records.append(record)
+        return records
+
+    def merge_remote(self, remote_payload: dict) -> list[merge.Conflict]:
+        """把对端载荷合并进本机（三方合并）。返回冲突列表。"""
+        remote_records = self._records_from_payload(remote_payload)
+        for record in remote_records:
+            self.hlc.observe(record.get("hlc"))
+
+        result = merge.merge_records(self.sync_base, self.all_records(), remote_records, self.vault_id or "")
+        merged_history = merge.merge_history(self.history_data, remote_payload.get("historyData", {}) or {})
+
+        self.main_data = [r for r in result.records if not r.get("deleted")]
+        self.tombstones = [r for r in result.records if r.get("deleted")]
+        self.history_data = merged_history
+        self.sync_base = result.base
+        self._mark_dirty()
+        self._save_state()
+        return result.conflicts
 
     # ===================== 历史记录 =====================
     def _add_to_history(self, name: str, count: str, rule_str: str) -> None:
@@ -500,13 +628,17 @@ class PasswordManagerModel:
             del self.undo_stack[0]
         self.redo_stack.clear()
 
+    def _restore(self, state: dict) -> None:
+        self.main_data = copy.deepcopy(state["main"])
+        self.history_data = copy.deepcopy(state["history"])
+        self.tombstones = copy.deepcopy(state.get("tombstones", []))
+        self.sync_base = copy.deepcopy(state.get("sync_base", {}))
+
     def undo(self) -> bool:
         if len(self.undo_stack) <= 1:
             return False
         self.redo_stack.append(self.undo_stack.pop())
-        prev = self.undo_stack[-1]
-        self.main_data = copy.deepcopy(prev["main"])
-        self.history_data = copy.deepcopy(prev["history"])
+        self._restore(self.undo_stack[-1])
         self._mark_dirty()
         return True
 
@@ -515,8 +647,7 @@ class PasswordManagerModel:
             return False
         nxt = self.redo_stack.pop()
         self.undo_stack.append(nxt)
-        self.main_data = copy.deepcopy(nxt["main"])
-        self.history_data = copy.deepcopy(nxt["history"])
+        self._restore(nxt)
         self._mark_dirty()
         return True
 
