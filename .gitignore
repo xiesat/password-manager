@@ -1,0 +1,31 @@
+# ---- Python ----
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+htmlcov/
+
+# ---- PyInstaller ----
+build/
+dist/
+*.spec.bak
+
+# ---- 应用产生的敏感文件（务必排除）----
+last_file_config.ini
+config.json
+*.sk
+*.tmp
+.password_manager_backups
+data/
+logs/
+
+# ---- 编辑器 / 系统 ----
+.vscode/
+.idea/
+Thumbs.db
+Desktop.ini
