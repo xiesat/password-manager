@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 )
 
 import storage
+import sync_dialog
 import theme
 from password_generator import estimate_strength
 from table_model import MASK, PasswordFilterProxy, PasswordTableModel
@@ -310,6 +311,7 @@ class PasswordManagerView(QMainWindow):
     undo_requested = Signal()
     redo_requested = Signal()
     lock_requested = Signal()
+    lan_sync_requested = Signal()
     order_changed = Signal(list)
     theme_changed = Signal(str)
     language_changed = Signal(str)
@@ -321,6 +323,7 @@ class PasswordManagerView(QMainWindow):
 
         self.controller = None
         self.history_window: HistoryWindow | None = None
+        self.sync_dialog: object | None = None
         self._current_path: str | None = None
         self._dirty = False
         self._show_passwords = False
@@ -412,6 +415,9 @@ class PasswordManagerView(QMainWindow):
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
+
+        sync_menu = menubar.addMenu(self.tr("同步(&S)"))
+        self._add_action(sync_menu, self.tr("局域网同步(&Y)…"), "Ctrl+Shift+Y", self.lan_sync_requested)
 
         edit_menu = menubar.addMenu(self.tr("编辑(&E)"))
         self._add_action(edit_menu, self.tr("撤销(&U)"), "Ctrl+Z", self.undo_requested)
@@ -770,6 +776,20 @@ class PasswordManagerView(QMainWindow):
             action.blockSignals(True)
             action.setChecked(key == setting)
             action.blockSignals(False)
+
+    def show_sync_dialog(self, server, on_client_sync) -> None:
+        """打开（模态）局域网同步窗口；关闭后由调用方停止服务。"""
+        dialog = sync_dialog.SyncDialog(server, on_client_sync, self)
+        self.sync_dialog = dialog
+        try:
+            dialog.exec()
+        finally:
+            self.sync_dialog = None
+
+    def notify_sync_applied(self, message: str) -> None:
+        """主机侧完成一次同步后的提示（由控制器从工作线程触发）。"""
+        if self.sync_dialog is not None:
+            self.sync_dialog.append_log(message)
 
     def set_language_checked(self, language: str) -> None:
         for key, action in self._language_actions.items():

@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "password-manager"
-version = "0.4.0"
+version = "0.5.0"
 description = "本地加密密码管理器（PySide6 + AES-256-GCM）"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -12,6 +12,7 @@ license = { text = "MIT" }
 dependencies = [
     "PySide6>=6.6,<7",
     "pycryptodome>=3.20",
+    "segno>=1.6",
 ]
 
 [project.optional-dependencies]
@@ -24,7 +25,7 @@ password-manager = "main:main"
 py-modules = [
     "main", "applog", "storage", "encryption", "password_generator",
     "model", "controller", "view", "table_model", "theme", "io_exchange",
-    "hlc", "merge",
+    "hlc", "merge", "sync_service", "sync_dialog",
 ]
 
 [tool.pytest.ini_options]

@@ -121,8 +121,15 @@ set QT_QPA_PLATFORM=offscreen && pytest -q    # Windows
   绝不静默丢弃任何一端的修改；删除与编辑冲突时保留存活版本。
 - **收敛**：冲突副本 ID 由 `uuid5` 确定性派生，两端独立计算得到完全相同的结果。
 - **验证**：`spec/merge_vectors.json` 是黄金测试向量，桌面端已全部通过；Android 端将用同一份向量对齐。
-- **状态**：合并引擎与格式已就绪并测试（131 个用例）；局域网传输（HTTPS + mDNS + 扫码配对）
-  与 Android 客户端待实现。
+- **传输**：桌面端作为主机监听局域网 HTTP，展示**配对二维码**；另一端扫码/粘贴配对信息即可同步。
+  交换的是**整库密文**，认证用 HKDF + HMAC（时间戳 + nonce 防重放），因此不需要 TLS 与证书体系；
+  二维码直接携带地址，也不依赖 mDNS。协议见 [spec/SYNC_PROTOCOL.md](spec/SYNC_PROTOCOL.md)。
+- **使用**：打开库 → 菜单「同步 → 局域网同步…」→ 另一端扫码或粘贴配对信息 → 完成。
+- **状态**：格式、合并引擎、局域网传输均已完成并测试（**154** 个用例）；
+  **Android 客户端待实现**（按 `spec/` 中的规范与测试向量对齐即可）。
+
+> 说明：两端必须都安装了本程序并持有同一个库密钥，协议不传输密钥。
+> Windows 首次启动同步会弹出防火墙询问，请选择"专用网络"。
 
 ## 项目结构
 
@@ -139,7 +146,9 @@ set QT_QPA_PLATFORM=offscreen && pytest -q    # Windows
 ├─ io_exchange.py           # CSV 导入导出
 ├─ hlc.py                   # 混合逻辑时钟（同步排序）
 ├─ merge.py                 # 三方合并引擎（多端冲突保留）
-├─ spec/                    # 跨平台格式规范 + 黄金测试向量
+├─ sync_service.py          # 局域网同步服务（主机 + 客户端、HMAC 认证）
+├─ sync_dialog.py           # 同步界面（二维码配对）
+├─ spec/                    # 跨平台格式/协议规范 + 黄金测试向量
 ├─ storage.py               # 原子写入、%APPDATA% 配置
 ├─ applog.py                # 滚动日志
 ├─ resources/style.qss      # 主题模板（占位符由 theme.py 替换）

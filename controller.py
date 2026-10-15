@@ -7,16 +7,19 @@ from __future__ import annotations
 
 import copy
 import glob
+import json
 import logging
 import os
 import re
+import socket
 from datetime import datetime
 
-from PySide6.QtCore import QObject, QTimer
+from PySide6.QtCore import QObject, QTimer, Signal
 from PySide6.QtWidgets import QApplication
 
 import io_exchange
 import storage
+import sync_service
 import theme
 from model import PasswordManagerModel
 from view import PasswordManagerView
@@ -31,6 +34,9 @@ CLIPBOARD_SECONDS = 30
 
 class PasswordManagerController(QObject):
     """连接模型与视图，处理所有业务流程。"""
+
+    # 主机侧完成一次同步后，从 HTTP 工作线程通知主线程刷新界面
+    sync_applied = Signal(list)
 
     def __init__(self) -> None:
         super().__init__()
@@ -49,6 +55,9 @@ class PasswordManagerController(QObject):
         self.history_undo_stack: list = []
         self.history_redo_stack: list = []
         self.current_history_subject: str | None = None
+
+        self._sync_server: sync_service.SyncServer | None = None
+        self.sync_applied.connect(self._on_sync_applied)
 
         self._connect_signals()
         self.view.apply_theme(theme.load_setting())
@@ -74,6 +83,7 @@ class PasswordManagerController(QObject):
         view.undo_requested.connect(self.handle_undo)
         view.redo_requested.connect(self.handle_redo)
         view.lock_requested.connect(self.handle_lock)
+        view.lan_sync_requested.connect(self.handle_lan_sync)
         view.order_changed.connect(self.handle_order_changed)
         view.theme_changed.connect(self.handle_theme_changed)
         view.language_changed.connect(self.handle_language_changed)
@@ -87,6 +97,125 @@ class PasswordManagerController(QObject):
         theme.save_setting(setting)
         self.view.apply_theme(setting)
         self.view.show_status(self.tr("主题已切换"), 2000)
+
+    # ===================== 局域网同步 =====================
+    def handle_lan_sync(self) -> None:
+        """打开同步窗口：本机作为主机等待配对，同时也能作为客户端连接别人。"""
+        key = self._require_key()
+        if not key:
+            self.view.show_warning(self.tr("提示"), self.tr("请输入密钥！"))
+            return
+        if not self.model.current_file_path:
+            self.view.show_warning(self.tr("提示"), self.tr("请先打开或新建密钥文件"))
+            return
+
+        server = sync_service.SyncServer(
+            apply_remote=self._apply_remote_blob,
+            vault_id=self.model.vault_id,
+            device_id=self.model.device_id,
+            device_name=socket.gethostname(),
+        )
+        try:
+            server.start()
+        except OSError as exc:
+            self.view.show_error(self.tr("同步失败"), self.tr("无法启动同步服务：%1").replace("%1", str(exc)))
+            return
+
+        self._sync_server = server
+        try:
+            self.view.show_sync_dialog(server, self._client_sync)
+        finally:
+            server.stop()
+            self._sync_server = None
+
+    @staticmethod
+    def _conflict_dict(conflict) -> dict:
+        return {
+            "kind": conflict.kind,
+            "name": conflict.name,
+            "copy_id": conflict.copy_id,
+            "origin": conflict.origin,
+        }
+
+    def _apply_remote_blob(self, remote_blob: str) -> tuple[str, list[dict]]:
+        """主机侧：解密对端密文 → 合并 → 返回合并后的整库密文（在 HTTP 线程执行）。"""
+        if not self._session_key:
+            raise ValueError("本机未解锁")
+
+        remote = PasswordManagerModel()
+        ok, message, _version = remote.detect_and_store(remote_blob)
+        if not ok:
+            raise ValueError(message)
+        if not remote.decrypt_with_user_key(self._session_key):
+            raise ValueError("对端使用了不同的密钥")
+        try:
+            payload = json.loads(remote.raw_decrypted_data)
+        except json.JSONDecodeError as exc:
+            raise ValueError("对端数据无法解析") from exc
+
+        conflicts = self.model.merge_remote(payload)
+        merged_blob = self.model.encrypt_data(self._session_key, self.model.prepare_export_data())
+        if self.model.current_file_path:
+            storage.atomic_write_text(self.model.current_file_path, merged_blob)
+            self.model.mark_clean()
+
+        summary = [self._conflict_dict(c) for c in conflicts]
+        self.sync_applied.emit(summary)
+        return merged_blob, summary
+
+    def _on_sync_applied(self, summary: list) -> None:
+        self._reload()
+        self.view.update_window_title(self.model.current_file_path)
+        self.view.set_dirty(self.model.is_dirty())
+        message = self.tr("已与一台设备完成同步")
+        if summary:
+            message += self.tr("，其中 %1 条存在冲突（两个版本都已保留）").replace("%1", str(len(summary)))
+        self.view.notify_sync_applied(message)
+
+    def _client_sync(self, pairing_text: str) -> tuple[bool, str, list]:
+        """客户端侧：把本机密文发给主机，并采用主机返回的合并结果。"""
+        key = self._require_key()
+        if not key:
+            return False, self.tr("请先输入密钥"), []
+        if not self.model.current_file_path:
+            return False, self.tr("请先打开或新建密钥文件"), []
+
+        try:
+            client = sync_service.SyncClient.from_pairing_text(pairing_text)
+        except sync_service.SyncError as exc:
+            return False, str(exc), []
+        if client.vault_id != self.model.vault_id:
+            return False, self.tr("对方的库与本机不是同一个（vault_id 不一致）"), []
+
+        local_blob = self.model.encrypt_data(key, self.model.prepare_export_data())
+        try:
+            result = client.sync(local_blob)
+        except sync_service.SyncError as exc:
+            return False, str(exc), []
+
+        merged_blob = str(result.get("vault") or "")
+        if not merged_blob:
+            return False, self.tr("主机返回内容为空"), []
+
+        check = PasswordManagerModel()
+        ok, _message, _version = check.detect_and_store(merged_blob)
+        if not ok or not check.decrypt_with_user_key(key):
+            return False, self.tr("主机返回的库无法解密"), []
+
+        storage.atomic_write_text(self.model.current_file_path, merged_blob)
+        self.model.detect_and_store(merged_blob)
+        self.model.decrypt_with_user_key(key)
+        self.model.load_data_from_decrypted_json()
+        self.model.mark_clean()
+        self._reload()
+        self.view.update_window_title(self.model.current_file_path)
+        self.view.set_dirty(False)
+
+        conflicts = list(result.get("conflicts") or [])
+        message = self.tr("同步完成")
+        if conflicts:
+            message += self.tr("，%1 条冲突已保留两个版本").replace("%1", str(len(conflicts)))
+        return True, message, conflicts
 
     def handle_language_changed(self, language: str) -> None:
         config = storage.load_config()

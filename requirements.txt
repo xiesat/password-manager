@@ -1,6 +1,7 @@
 # 运行时依赖（Python 3.10 - 3.14；PySide6 6.12 提供 cp310-abi3 wheel，兼容 3.14）
 PySide6>=6.6,<7
 pycryptodome>=3.20
+segno>=1.6          # 局域网同步的配对二维码（纯 Python，无额外依赖）
 
 # 可选精简：把上面第一行换成下面这行，可省去约 130MB 的 WebEngine/Addons（本项目只用 Core/Gui/Widgets）
 # PySide6-Essentials>=6.6,<7
