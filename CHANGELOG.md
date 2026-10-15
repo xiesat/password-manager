@@ -4,6 +4,21 @@
 
 ## [Unreleased]
 
+## [0.6.2] - 2026-10-15
+
+### 修复（Android 现在真正可编译、可出包）
+- `VaultApp.kt`：修正 `KeyboardOptions` 的包路径（`androidx.compose.foundation.text`），并为 `ListItem` 加 `@OptIn`。
+- `app/build.gradle.kts`：补 `lifecycle-viewmodel-ktx`；`versionName` 升到 0.6.1。
+- `core/build.gradle.kts`：去掉强制 JDK 17 toolchain，改为用当前 JDK 编译、产出 Java 17 字节码。
+- `android/gradle.properties`：加入 `android.overridePathCheck=true`，允许工程路径含非 ASCII（中文目录）。
+- `.gitignore`：加入 `.gradle/`、`local.properties`。
+
+### 新增
+- 提交 **Gradle wrapper**（`gradlew` / `gradlew.bat` / `gradle-wrapper.jar`），克隆后可直接构建。
+- CI 新增 `android-app` job：构建 debug APK 并上传 artifact，保证 Android 端持续可编译。
+- Release workflow 新增 `android` job：**每次发版自动构建并附上 Android debug APK** 与校验和。
+- 首个可用 APK 已随 Release 提供：`PasswordManager-android-debug.apk`（minSdk 26 / target 35）。
+
 ## [0.6.1] - 2026-10-15
 
 ### 修复

@@ -55,16 +55,22 @@ cd android && ./gradlew :core:specVectors
 
 ## 构建 APK
 
-需要 Android Studio（或 Android SDK + Gradle）。仓库内只提供了 `gradle-wrapper.properties`，
-首次请由 Android Studio 生成 wrapper，或执行一次：
+仓库已包含 **Gradle wrapper**，克隆后即可直接构建（需要 JDK 17+ 与 Android SDK）：
 
 ```bash
 cd android
-gradle wrapper            # 需要本机已安装 Gradle
-./gradlew :app:assembleDebug
+./gradlew :app:assembleDebug        # Windows: gradlew.bat :app:assembleDebug
 ```
 
 产物：`android/app/build/outputs/apk/debug/app-debug.apk`
+
+也可以用 Android Studio 直接打开 `android/` 目录运行。
+
+> 工程路径含中文等非 ASCII 字符时，AGP 默认会拒绝构建；
+> `gradle.properties` 里已设置 `android.overridePathCheck=true` 放行（现代 aapt2 能正确处理 UTF-8 路径）。
+
+**不想自己编译**：每个 Release 都附带了 CI 构建好的
+`PasswordManager-android-debug.apk`（debug 签名，可直接安装测试）。
 
 ## 使用流程
 

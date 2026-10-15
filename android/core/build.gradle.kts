@@ -2,8 +2,16 @@ plugins {
     id("org.jetbrains.kotlin.jvm")
 }
 
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
 kotlin {
-    jvmToolchain(17)
+    // 用当前 JDK 编译、产出 Java 17 字节码（避免强制要求本机安装 JDK 17 toolchain）
+    compilerOptions {
+        jvmTarget.set(org.jetbrains.kotlin.gradle.dsl.JvmTarget.JVM_17)
+    }
 }
 
 dependencies {

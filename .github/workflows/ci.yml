@@ -40,6 +40,31 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: pytest -q
 
+  android-app:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+
+      - uses: android-actions/setup-android@v3
+
+      - name: Install SDK packages
+        run: sdkmanager "platforms;android-35" "build-tools;35.0.0" "platform-tools"
+
+      - name: Build debug APK
+        working-directory: android
+        run: ./gradlew :app:assembleDebug --no-daemon
+
+      - name: Upload APK
+        uses: actions/upload-artifact@v4
+        with:
+          name: PasswordManager-android-debug
+          path: android/app/build/outputs/apk/debug/app-debug.apk
+
   kotlin-core:
     runs-on: ubuntu-latest
     steps:

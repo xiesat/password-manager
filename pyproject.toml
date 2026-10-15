@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "password-manager"
-version = "0.6.1"
+version = "0.6.2"
 description = "本地加密密码管理器（PySide6 + AES-256-GCM）"
 readme = "README.md"
 requires-python = ">=3.10"
