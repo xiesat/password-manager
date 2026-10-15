@@ -246,9 +246,7 @@ def test_vault_download_requires_auth(synced_server):
 
 def test_vault_download_returns_decryptable_blob(synced_server):
     a, _b, server, _conflicts = synced_server
-    client = SyncClient(
-        host="127.0.0.1", port=server.port, token=server.token, vault_id=a.vault_id
-    )
+    client = SyncClient(host="127.0.0.1", port=server.port, token=server.token, vault_id=a.vault_id)
     blob = client.fetch_vault()
     assert blob.startswith("v3:")
 
@@ -262,9 +260,7 @@ def test_vault_download_returns_decryptable_blob(synced_server):
 
 def test_vault_download_rejects_wrong_token(synced_server):
     a, _b, server, _conflicts = synced_server
-    client = SyncClient(
-        host="127.0.0.1", port=server.port, token="wrong-token", vault_id=a.vault_id
-    )
+    client = SyncClient(host="127.0.0.1", port=server.port, token="wrong-token", vault_id=a.vault_id)
     with pytest.raises(SyncError):
         client.fetch_vault()
 
@@ -280,9 +276,7 @@ def test_vault_download_disabled_when_host_has_no_blob():
     )
     server.start()
     try:
-        client = SyncClient(
-            host="127.0.0.1", port=server.port, token=server.token, vault_id=a.vault_id
-        )
+        client = SyncClient(host="127.0.0.1", port=server.port, token=server.token, vault_id=a.vault_id)
         with pytest.raises(SyncError):
             client.fetch_vault()
     finally:

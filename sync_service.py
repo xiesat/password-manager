@@ -145,8 +145,12 @@ class _Handler(BaseHTTPRequestHandler):
             nonce = self.headers.get("X-PM-Nonce") or ""
             signature = self.headers.get("X-PM-Signature")
             if not self.sync_server.check_auth(
-                timestamp=timestamp, nonce=nonce, signature=signature,
-                method="GET", path=self.path, body=b"",
+                timestamp=timestamp,
+                nonce=nonce,
+                signature=signature,
+                method="GET",
+                path=self.path,
+                body=b"",
             ):
                 self._respond(401, {"error": "unauthorized"})
                 return
