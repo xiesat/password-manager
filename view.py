@@ -1,6 +1,6 @@
 """视图层 (View) - PySide6 实现。
 
-只负责界面与用户交互，不含业务逻辑。样式集中在 resources/style.qss。
+只负责界面与用户交互，不含业务逻辑。样式由 theme.py 生成并应用。
 """
 
 from __future__ import annotations
@@ -8,10 +8,9 @@ from __future__ import annotations
 import os
 import secrets
 import string
-import sys
 
-from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QAction, QFont, QIcon, QKeySequence
+from PySide6.QtCore import QPoint, Qt, Signal
+from PySide6.QtGui import QAction, QActionGroup, QIcon, QKeySequence
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QApplication,
@@ -22,7 +21,6 @@ from PySide6.QtWidgets import (
     QFormLayout,
     QGroupBox,
     QHBoxLayout,
-    QInputDialog,
     QLabel,
     QLineEdit,
     QMainWindow,
@@ -30,43 +28,50 @@ from PySide6.QtWidgets import (
     QMessageBox,
     QPushButton,
     QSpinBox,
+    QStackedWidget,
     QStatusBar,
+    QTableView,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
 
-MASK = "\u2022" * 10
-PLACEHOLDER_NAME = "暂无密码主体"
+import storage
+import theme
+from password_generator import estimate_strength
+from table_model import MASK, PasswordFilterProxy, PasswordTableModel
 
 
-def resource_path(*parts: str) -> str:
-    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
-    return os.path.join(base, *parts)
+def _strength_labels() -> list[str]:
+    return ["", "很弱", "弱", "中", "强", "极强"]
 
 
-def estimate_strength(password: str) -> tuple[int, str]:
-    """粗略强度评估，返回 (1-5, 文案)。"""
-    length = len(password)
-    classes = sum(
-        [
-            any(c.islower() for c in password),
-            any(c.isupper() for c in password),
-            any(c.isdigit() for c in password),
-            any(not c.isalnum() for c in password),
-        ]
-    )
-    if length == 0:
-        return 0, ""
-    if length < 8:
-        score = 1
-    elif length < 12:
-        score = min(3, classes)
-    else:
-        score = min(5, 1 + classes + (1 if length >= 16 else 0))
-    score = max(1, min(5, score))
-    return score, {1: "很弱", 2: "弱", 3: "中", 4: "强", 5: "极强"}[score]
+class PasswordTableView(QTableView):
+    """支持内部拖拽排序的表格视图。"""
+
+    rows_reordered = Signal(list, int)
+
+    def dropEvent(self, event) -> None:  # noqa: N802 - Qt 命名
+        selection = self.selectionModel()
+        if selection is None:
+            event.ignore()
+            return
+        rows = sorted({index.row() for index in selection.selectedRows()})
+        if not rows:
+            event.ignore()
+            return
+
+        position = event.position().toPoint() if hasattr(event, "position") else event.pos()
+        index = self.indexAt(position)
+        target = index.row() if index.isValid() else self.model().rowCount()
+        rect = self.visualRect(index) if index.isValid() else None
+        if rect is not None and position.y() > rect.center().y():
+            target += 1
+
+        event.setDropAction(Qt.DropAction.MoveAction)
+        event.accept()
+        self.rows_reordered.emit(rows, target)
 
 
 class UnlockDialog(QDialog):
@@ -88,9 +93,9 @@ class UnlockDialog(QDialog):
         key_row = QHBoxLayout()
         self.key_edit = QLineEdit()
         self.key_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        self.key_edit.setPlaceholderText("请输入密钥…")
+        self.key_edit.setPlaceholderText(self.tr("请输入密钥…"))
         key_row.addWidget(self.key_edit)
-        self.show_btn = QPushButton("显示")
+        self.show_btn = QPushButton(self.tr("显示"))
         self.show_btn.setCheckable(True)
         self.show_btn.setProperty("role", "icon")
         key_row.addWidget(self.show_btn)
@@ -99,15 +104,15 @@ class UnlockDialog(QDialog):
         if confirm:
             self.confirm_edit = QLineEdit()
             self.confirm_edit.setEchoMode(QLineEdit.EchoMode.Password)
-            self.confirm_edit.setPlaceholderText("再次输入密钥…")
+            self.confirm_edit.setPlaceholderText(self.tr("再次输入密钥…"))
             layout.addWidget(self.confirm_edit)
 
         self.strength_label = QLabel("")
-        self.strength_label.setStyleSheet("color:#64748B;")
+        self.strength_label.setObjectName("emptyStateHint")
         layout.addWidget(self.strength_label)
 
         if confirm:
-            warn = QLabel("注意：密钥丢失将无法恢复数据，请务必妥善保管。")
+            warn = QLabel(self.tr("注意：密钥丢失将无法恢复数据，请务必妥善保管。"))
             warn.setWordWrap(True)
             warn.setStyleSheet("color:#B45309;")
             layout.addWidget(warn)
@@ -115,10 +120,11 @@ class UnlockDialog(QDialog):
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setProperty("role", "primary")
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setDefault(True)
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok.setText(self.tr("确定"))
+        ok.setProperty("role", "primary")
+        ok.setDefault(True)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(self.tr("取消"))
         buttons.accepted.connect(self._on_accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -134,16 +140,20 @@ class UnlockDialog(QDialog):
             self.confirm_edit.setEchoMode(mode)
 
     def _update_strength(self, text: str) -> None:
-        score, label = estimate_strength(text)
-        bars = "\u2588" * score + "\u2591" * (5 - score) if score else ""
-        self.strength_label.setText(f"强度 {bars} {label}" if score else "")
+        score = estimate_strength(text)
+        if not score:
+            self.strength_label.setText("")
+            return
+        labels = _strength_labels()
+        bars = "\u2588" * score + "\u2591" * (5 - score)
+        self.strength_label.setText(self.tr("强度 %1 %2").replace("%1", bars).replace("%2", labels[score]))
 
     def _on_accept(self) -> None:
         if not self.key_edit.text():
-            QMessageBox.warning(self, "提示", "密钥不能为空！")
+            QMessageBox.warning(self, self.tr("提示"), self.tr("密钥不能为空！"))
             return
         if self.confirm_edit is not None and self.confirm_edit.text() != self.key_edit.text():
-            QMessageBox.warning(self, "提示", "两次输入的密钥不一致！")
+            QMessageBox.warning(self, self.tr("提示"), self.tr("两次输入的密钥不一致！"))
             return
         self.accept()
 
@@ -156,44 +166,45 @@ class AddSubjectDialog(QDialog):
 
     def __init__(self, parent=None) -> None:
         super().__init__(parent)
-        self.setWindowTitle("添加密码主体")
+        self.setWindowTitle(self.tr("添加密码主体"))
         self.setMinimumWidth(460)
 
         layout = QVBoxLayout(self)
         form = QFormLayout()
 
         self.name_edit = QLineEdit()
-        self.name_edit.setPlaceholderText("例如：Google 账号")
-        form.addRow("名称", self.name_edit)
+        self.name_edit.setPlaceholderText(self.tr("例如：Google 账号"))
+        form.addRow(self.tr("名称"), self.name_edit)
 
         self.length_spin = QSpinBox()
         self.length_spin.setRange(6, 64)
         self.length_spin.setValue(16)
-        form.addRow("密码长度", self.length_spin)
+        form.addRow(self.tr("密码长度"), self.length_spin)
         layout.addLayout(form)
 
-        group = QGroupBox("字符类型")
+        group = QGroupBox(self.tr("字符类型"))
         group_layout = QVBoxLayout(group)
-        self.lower_check = QCheckBox("小写字母 (a-z)")
-        self.upper_check = QCheckBox("大写字母 (A-Z)")
-        self.digit_check = QCheckBox("数字 (0-9)")
-        self.symbol_check = QCheckBox("特殊字符 (!@#$…)")
+        self.lower_check = QCheckBox(self.tr("小写字母 (a-z)"))
+        self.upper_check = QCheckBox(self.tr("大写字母 (A-Z)"))
+        self.digit_check = QCheckBox(self.tr("数字 (0-9)"))
+        self.symbol_check = QCheckBox(self.tr("特殊字符 (!@#$…)"))
         for box in (self.lower_check, self.upper_check, self.digit_check, self.symbol_check):
             box.setChecked(True)
             group_layout.addWidget(box)
         layout.addWidget(group)
 
         self.preview_label = QLabel("")
-        self.preview_label.setStyleSheet("color:#334155;")
+        self.preview_label.setObjectName("emptyStateHint")
         layout.addWidget(self.preview_label)
 
         buttons = QDialogButtonBox(
             QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
         )
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setText("确定")
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setProperty("role", "primary")
-        buttons.button(QDialogButtonBox.StandardButton.Ok).setDefault(True)
-        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText("取消")
+        ok = buttons.button(QDialogButtonBox.StandardButton.Ok)
+        ok.setText(self.tr("确定"))
+        ok.setProperty("role", "primary")
+        ok.setDefault(True)
+        buttons.button(QDialogButtonBox.StandardButton.Cancel).setText(self.tr("取消"))
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         layout.addWidget(buttons)
@@ -205,7 +216,7 @@ class AddSubjectDialog(QDialog):
 
     def _update_preview(self) -> None:
         pool = ""
-        classes = []
+        classes: list[str] = []
         if self.lower_check.isChecked():
             pool += string.ascii_lowercase
             classes.append(string.ascii_lowercase)
@@ -216,8 +227,9 @@ class AddSubjectDialog(QDialog):
             pool += string.digits
             classes.append(string.digits)
         if self.symbol_check.isChecked():
-            pool += "!@#$%^&*()_+-=[]{}|;:,.<>?"
-            classes.append("!@#$%^&*()_+-=[]{}|;:,.<>?")
+            symbols = "!@#$%^&*()_+-=[]{}|;:,.<>?"
+            pool += symbols
+            classes.append(symbols)
         if not pool:
             pool = string.ascii_lowercase + string.digits
             classes = [string.ascii_lowercase, string.digits]
@@ -227,8 +239,11 @@ class AddSubjectDialog(QDialog):
         sample += [secrets.choice(pool) for _ in range(max(0, length - len(sample)))]
         secrets.SystemRandom().shuffle(sample)
         preview = "".join(sample)[:16]
-        score, label = estimate_strength("".join(sample))
-        self.preview_label.setText(f"预览：{preview}…   强度：{label}")
+        labels = _strength_labels()
+        score = estimate_strength("".join(sample))
+        self.preview_label.setText(
+            self.tr("预览：%1…   强度：%2").replace("%1", preview).replace("%2", labels[score])
+        )
 
     def get_data(self) -> tuple:
         return (
@@ -247,19 +262,18 @@ class HistoryWindow(QDialog):
     def __init__(self, subject_name: str, parent=None) -> None:
         super().__init__(parent)
         self.subject_name = subject_name
-        self.setWindowTitle(f"历史密码 - {subject_name}")
+        self.setWindowTitle(self.tr("历史密码 - %1").replace("%1", subject_name))
         self.resize(680, 420)
 
         layout = QVBoxLayout(self)
-
         toolbar = QHBoxLayout()
-        self.show_btn = QPushButton("显示密码")
+        self.show_btn = QPushButton(self.tr("显示密码"))
         self.show_btn.setCheckable(True)
-        self.copy_btn = QPushButton("复制")
-        self.delete_btn = QPushButton("删除")
+        self.copy_btn = QPushButton(self.tr("复制"))
+        self.delete_btn = QPushButton(self.tr("删除"))
         self.delete_btn.setProperty("role", "danger")
-        self.undo_btn = QPushButton("撤销")
-        self.redo_btn = QPushButton("重做")
+        self.undo_btn = QPushButton(self.tr("撤销"))
+        self.redo_btn = QPushButton(self.tr("重做"))
         toolbar.addWidget(self.show_btn)
         toolbar.addStretch()
         toolbar.addWidget(self.undo_btn)
@@ -270,7 +284,7 @@ class HistoryWindow(QDialog):
 
         self.tree = QTreeWidget()
         self.tree.setColumnCount(3)
-        self.tree.setHeaderLabels(["序号", "历史密码", "生成时间"])
+        self.tree.setHeaderLabels([self.tr("序号"), self.tr("历史密码"), self.tr("生成时间")])
         self.tree.setColumnWidth(0, 70)
         self.tree.setColumnWidth(1, 320)
         self.tree.setAlternatingRowColors(True)
@@ -285,26 +299,36 @@ class PasswordManagerView(QMainWindow):
     open_file_requested = Signal()
     save_file_requested = Signal()
     save_as_requested = Signal()
+    import_csv_requested = Signal()
+    export_csv_requested = Signal()
     add_subject_requested = Signal()
     clear_all_requested = Signal()
+    generate_selected_requested = Signal()
     copy_selected_requested = Signal()
     delete_selected_requested = Signal()
+    history_selected_requested = Signal()
     undo_requested = Signal()
     redo_requested = Signal()
     lock_requested = Signal()
+    order_changed = Signal(list)
+    theme_changed = Signal(str)
+    language_changed = Signal(str)
 
     def __init__(self) -> None:
         super().__init__()
-        self.setWindowTitle("密码管理器")
-        self.resize(980, 660)
+        self.setWindowTitle(self.tr("密码管理器"))
+        self.resize(1020, 680)
 
         self.controller = None
         self.history_window: HistoryWindow | None = None
         self._current_path: str | None = None
         self._dirty = False
         self._show_passwords = False
+        self._history_cache: list = []
+        self._theme_actions: dict[str, QAction] = {}
+        self._language_actions: dict[str, QAction] = {}
 
-        icon_path = resource_path("resources", "app_icon.png")
+        icon_path = storage.resource_path("resources", "app_icon.png")
         if os.path.exists(icon_path):
             self.setWindowIcon(QIcon(icon_path))
 
@@ -314,17 +338,20 @@ class PasswordManagerView(QMainWindow):
         self._create_shortcuts()
         self._show_initial_view()
 
-    # ===================== 基础布局 =====================
+    # ===================================================== 基础布局
     def set_controller(self, controller) -> None:
         self.controller = controller
 
     def _create_status_bar(self) -> None:
         self.status_bar = QStatusBar()
         self.setStatusBar(self.status_bar)
+        self.clipboard_label = QLabel("")
+        self.clipboard_label.setObjectName("emptyStateHint")
+        self.status_bar.addPermanentWidget(self.clipboard_label)
         self.dirty_indicator = QLabel("")
         self.dirty_indicator.setStyleSheet("color:#F59E0B;")
         self.status_bar.addPermanentWidget(self.dirty_indicator)
-        self.status_bar.showMessage("就绪", 2000)
+        self.status_bar.showMessage(self.tr("就绪"), 2000)
 
     def _create_central_widget(self) -> None:
         self.central_widget = QWidget()
@@ -342,29 +369,25 @@ class PasswordManagerView(QMainWindow):
         layout = QVBoxLayout(self.initial_widget)
         layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        title = QLabel("密码管理器")
-        font = QFont()
-        font.setPointSize(24)
-        font.setBold(True)
-        title.setFont(font)
+        title = QLabel(self.tr("密码管理器"))
+        title.setObjectName("brandTitle")
         layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
 
-        subtitle = QLabel("本地加密 · AES-256-GCM · 密码不落盘")
-        subtitle.setStyleSheet("color:#64748B;")
+        subtitle = QLabel(self.tr("本地加密 · AES-256-GCM · 密码不落盘"))
+        subtitle.setObjectName("emptyStateHint")
         layout.addWidget(subtitle, alignment=Qt.AlignmentFlag.AlignCenter)
 
         layout.addSpacing(36)
-
         buttons = QHBoxLayout()
         buttons.setAlignment(Qt.AlignmentFlag.AlignCenter)
 
-        new_btn = QPushButton("新建文件")
+        new_btn = QPushButton(self.tr("新建文件"))
         new_btn.setProperty("role", "primary")
         new_btn.setMinimumSize(130, 40)
         new_btn.clicked.connect(self.new_file_requested.emit)
         buttons.addWidget(new_btn)
 
-        open_btn = QPushButton("打开文件")
+        open_btn = QPushButton(self.tr("打开文件"))
         open_btn.setMinimumSize(130, 40)
         open_btn.clicked.connect(self.open_file_requested.emit)
         buttons.addWidget(open_btn)
@@ -374,39 +397,71 @@ class PasswordManagerView(QMainWindow):
     def _create_menu_bar(self) -> None:
         menubar = self.menuBar()
 
-        file_menu = menubar.addMenu("文件(&F)")
-        self._add_action(file_menu, "新建(&N)", "Ctrl+N", self.new_file_requested)
-        self._add_action(file_menu, "打开(&O)", "Ctrl+O", self.open_file_requested)
+        file_menu = menubar.addMenu(self.tr("文件(&F)"))
+        self._add_action(file_menu, self.tr("新建(&N)"), "Ctrl+N", self.new_file_requested)
+        self._add_action(file_menu, self.tr("打开(&O)"), "Ctrl+O", self.open_file_requested)
         file_menu.addSeparator()
-        self._add_action(file_menu, "保存(&S)", "Ctrl+S", self.save_file_requested)
-        self._add_action(file_menu, "另存为(&A)", "Ctrl+Shift+S", self.save_as_requested)
+        self._add_action(file_menu, self.tr("保存(&S)"), "Ctrl+S", self.save_file_requested)
+        self._add_action(file_menu, self.tr("另存为(&A)"), "Ctrl+Shift+S", self.save_as_requested)
         file_menu.addSeparator()
-        self._add_action(file_menu, "锁定(&L)", "Ctrl+L", self.lock_requested)
-        quit_action = QAction("退出(&Q)", self)
+        self._add_action(file_menu, self.tr("导入 CSV(&I)"), None, self.import_csv_requested)
+        self._add_action(file_menu, self.tr("导出 CSV(&E)"), None, self.export_csv_requested)
+        file_menu.addSeparator()
+        self._add_action(file_menu, self.tr("锁定(&L)"), "Ctrl+L", self.lock_requested)
+        quit_action = QAction(self.tr("退出(&Q)"), self)
         quit_action.setShortcut("Ctrl+Q")
         quit_action.triggered.connect(self.close)
         file_menu.addAction(quit_action)
 
-        edit_menu = menubar.addMenu("编辑(&E)")
-        self._add_action(edit_menu, "撤销(&U)", "Ctrl+Z", self.undo_requested)
-        self._add_action(edit_menu, "重做(&R)", "Ctrl+Y", self.redo_requested)
+        edit_menu = menubar.addMenu(self.tr("编辑(&E)"))
+        self._add_action(edit_menu, self.tr("撤销(&U)"), "Ctrl+Z", self.undo_requested)
+        self._add_action(edit_menu, self.tr("重做(&R)"), "Ctrl+Y", self.redo_requested)
         edit_menu.addSeparator()
-        self._add_action(edit_menu, "复制密码(&C)", "Ctrl+C", self.copy_selected_requested)
-        self._add_action(edit_menu, "删除选中", "Delete", self.delete_selected_requested)
+        self._add_action(edit_menu, self.tr("生成新密码(&G)"), "Ctrl+G", self.generate_selected_requested)
+        self._add_action(edit_menu, self.tr("复制密码(&C)"), "Ctrl+C", self.copy_selected_requested)
+        self._add_action(edit_menu, self.tr("删除选中(&D)"), "Delete", self.delete_selected_requested)
         edit_menu.addSeparator()
-        self._add_action(edit_menu, "清空所有数据", None, self.clear_all_requested)
+        self._add_action(edit_menu, self.tr("清空所有数据"), None, self.clear_all_requested)
 
-        view_menu = menubar.addMenu("视图(&V)")
-        self.show_passwords_action = QAction("显示密码", self)
+        view_menu = menubar.addMenu(self.tr("视图(&V)"))
+        self.show_passwords_action = QAction(self.tr("显示密码"), self)
         self.show_passwords_action.setCheckable(True)
         self.show_passwords_action.toggled.connect(self._toggle_show_passwords)
         view_menu.addAction(self.show_passwords_action)
 
-        help_menu = menubar.addMenu("帮助(&H)")
-        shortcuts = QAction("键盘快捷键", self)
+        theme_menu = view_menu.addMenu(self.tr("主题"))
+        theme_group = QActionGroup(self)
+        theme_group.setExclusive(True)
+        for key, label in (
+            ("system", self.tr("跟随系统")),
+            ("light", self.tr("浅色")),
+            ("dark", self.tr("深色")),
+        ):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(key == "system")
+            action.triggered.connect(lambda _checked=False, k=key: self.theme_changed.emit(k))
+            theme_group.addAction(action)
+            theme_menu.addAction(action)
+            self._theme_actions[key] = action
+
+        language_menu = view_menu.addMenu(self.tr("语言 / Language"))
+        language_group = QActionGroup(self)
+        language_group.setExclusive(True)
+        for key, label in (("zh", "简体中文"), ("en", "English")):
+            action = QAction(label, self)
+            action.setCheckable(True)
+            action.setChecked(key == "zh")
+            action.triggered.connect(lambda _checked=False, k=key: self.language_changed.emit(k))
+            language_group.addAction(action)
+            language_menu.addAction(action)
+            self._language_actions[key] = action
+
+        help_menu = menubar.addMenu(self.tr("帮助(&H)"))
+        shortcuts = QAction(self.tr("键盘快捷键"), self)
         shortcuts.triggered.connect(self._show_shortcuts)
         help_menu.addAction(shortcuts)
-        about = QAction("关于", self)
+        about = QAction(self.tr("关于"), self)
         about.triggered.connect(self._show_about)
         help_menu.addAction(about)
 
@@ -424,16 +479,16 @@ class PasswordManagerView(QMainWindow):
         focus_search.triggered.connect(self._focus_search)
         self.addAction(focus_search)
 
-    # ===================== 主界面 =====================
+    # ===================================================== 主界面
     def switch_to_main_interface(self) -> None:
         self.initial_widget.setVisible(False)
         self.work_widget.setVisible(True)
-        if not hasattr(self, "tree"):
+        if not hasattr(self, "table"):
             self._create_main_interface()
 
     def reset_to_initial(self) -> None:
-        if hasattr(self, "tree"):
-            self.tree.clear()
+        if hasattr(self, "table_model"):
+            self.table_model.set_rows([])
         self.work_widget.setVisible(False)
         self.initial_widget.setVisible(True)
         self.update_window_title(None)
@@ -443,181 +498,188 @@ class PasswordManagerView(QMainWindow):
 
         toolbar = QHBoxLayout()
         self.search_input = QLineEdit()
-        self.search_input.setPlaceholderText("搜索主体…")
+        self.search_input.setPlaceholderText(self.tr("搜索主体、更新时间…"))
         self.search_input.setClearButtonEnabled(True)
         self.search_input.setMaximumWidth(320)
         self.search_input.textChanged.connect(self._on_search_changed)
         toolbar.addWidget(self.search_input)
         toolbar.addStretch()
 
-        add_btn = QPushButton("新增主体")
+        add_btn = QPushButton(self.tr("新增主体"))
         add_btn.setProperty("role", "primary")
         add_btn.clicked.connect(self.add_subject_requested.emit)
         toolbar.addWidget(add_btn)
-
-        for label, signal in (
-            ("生成新密码", self._generate_selected),
-            ("复制", self.copy_selected_requested.emit),
-            ("历史", self._history_selected),
-            ("删除", self.delete_selected_requested.emit),
-            ("锁定", self.lock_requested.emit),
+        for label, signal, role in (
+            (self.tr("生成新密码"), self.generate_selected_requested.emit, None),
+            (self.tr("复制"), self.copy_selected_requested.emit, None),
+            (self.tr("历史"), self.history_selected_requested.emit, None),
+            (self.tr("删除"), self.delete_selected_requested.emit, "danger"),
+            (self.tr("锁定"), self.lock_requested.emit, None),
         ):
             button = QPushButton(label)
-            if label == "删除":
-                button.setProperty("role", "danger")
+            if role:
+                button.setProperty("role", role)
             button.clicked.connect(signal)
             toolbar.addWidget(button)
-
         layout.addLayout(toolbar)
 
-        self.tree = QTreeWidget()
-        self.tree.setColumnCount(5)
-        self.tree.setHeaderLabels(["序号", "密码生成主体", "密码", "第n次生成", "规则"])
-        self.tree.setColumnWidth(0, 60)
-        self.tree.setColumnWidth(1, 220)
-        self.tree.setColumnWidth(2, 240)
-        self.tree.setColumnWidth(3, 100)
-        self.tree.setColumnHidden(4, True)
-        self.tree.setAlternatingRowColors(True)
-        self.tree.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
-        self.tree.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
-        self.tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self.tree.customContextMenuRequested.connect(self._show_context_menu)
-        self.tree.itemDoubleClicked.connect(self._on_item_double_clicked)
-        self.tree.setDragEnabled(True)
-        self.tree.setAcceptDrops(True)
-        self.tree.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
-        self.tree.model().rowsMoved.connect(lambda *_: self.controller.handle_row_reorder())
-        layout.addWidget(self.tree)
+        self.stack = QStackedWidget()
+        self.table_model = PasswordTableModel(
+            [
+                self.tr("名称"),
+                self.tr("密码"),
+                self.tr("次数"),
+                self.tr("更新时间"),
+                self.tr("强度"),
+            ],
+            _strength_labels(),
+            self,
+        )
+        self.proxy = PasswordFilterProxy(self)
+        self.proxy.setSourceModel(self.table_model)
 
+        self.table = PasswordTableView()
+        self.table.setModel(self.proxy)
+        self.table.setSortingEnabled(True)
+        self.table.sortByColumn(0, Qt.SortOrder.AscendingOrder)
+        self.table.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self.table.setSelectionBehavior(QAbstractItemView.SelectionBehavior.SelectRows)
+        self.table.setEditTriggers(QAbstractItemView.EditTrigger.NoEditTriggers)
+        self.table.setAlternatingRowColors(True)
+        self.table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self.table.customContextMenuRequested.connect(self._show_context_menu)
+        self.table.doubleClicked.connect(lambda *_: self.history_selected_requested.emit())
+        self.table.setDragEnabled(True)
+        self.table.setAcceptDrops(True)
+        self.table.setDropIndicatorShown(True)
+        self.table.setDragDropMode(QAbstractItemView.DragDropMode.InternalMove)
+        self.table.setDefaultDropAction(Qt.DropAction.MoveAction)
+        self.table.verticalHeader().setVisible(False)
+        self.table.verticalHeader().setDefaultSectionSize(38)
+        self.table.horizontalHeader().setStretchLastSection(True)
+        self.table.rows_reordered.connect(self._on_rows_reordered)
+
+        self.stack.addWidget(self.table)
+        self.stack.addWidget(self._create_empty_state())
+        layout.addWidget(self.stack)
+
+    def _create_empty_state(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setAlignment(Qt.AlignmentFlag.AlignCenter)
+
+        title = QLabel(self.tr("还没有密码主体"))
+        title.setObjectName("emptyStateTitle")
+        layout.addWidget(title, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        hint = QLabel(self.tr("点击下方按钮添加第一个，或从 CSV 导入。"))
+        hint.setObjectName("emptyStateHint")
+        layout.addWidget(hint, alignment=Qt.AlignmentFlag.AlignCenter)
+
+        layout.addSpacing(16)
+        add_btn = QPushButton(self.tr("新增主体"))
+        add_btn.setProperty("role", "primary")
+        add_btn.setMinimumWidth(140)
+        add_btn.clicked.connect(self.add_subject_requested.emit)
+        layout.addWidget(add_btn, alignment=Qt.AlignmentFlag.AlignCenter)
+        return page
+
+    # ===================================================== 数据接口
+    def load_rows(self, rows: list[dict]) -> None:
+        self.table_model.set_rows(rows)
+        self.table_model.set_show_passwords(self._show_passwords)
+        self._update_empty_state()
+
+    def _update_empty_state(self) -> None:
+        if hasattr(self, "stack"):
+            self.stack.setCurrentIndex(0 if self.table_model.rowCount() else 1)
+
+    def selected_row_indexes(self) -> list[int]:
+        if not hasattr(self, "table"):
+            return []
+        source_rows = set()
+        for index in self.table.selectionModel().selectedRows():
+            mapped = self.proxy.mapToSource(index)
+            if mapped.isValid():
+                source_rows.add(mapped.row())
+        return sorted(source_rows)
+
+    def selected_row(self) -> int | None:
+        rows = self.selected_row_indexes()
+        return rows[0] if rows else None
+
+    def row_at(self, index: int) -> dict:
+        return self.table_model.row_at(index)
+
+    def set_show_passwords(self, show: bool) -> None:
+        self._show_passwords = show
+        if hasattr(self, "table_model"):
+            self.table_model.set_show_passwords(show)
+
+    # ===================================================== 交互
     def _focus_search(self) -> None:
         if hasattr(self, "search_input") and self.work_widget.isVisible():
             self.search_input.setFocus()
             self.search_input.selectAll()
 
     def _on_search_changed(self, text: str) -> None:
-        if not hasattr(self, "tree"):
-            return
-        keyword = text.strip().lower()
-        for item in self.get_all_row_items():
-            hidden = bool(keyword) and keyword not in item.text(1).lower()
-            item.setHidden(hidden)
+        if hasattr(self, "proxy"):
+            self.proxy.set_search(text)
+            self._update_empty_state()
 
     def _toggle_show_passwords(self, shown: bool) -> None:
-        self._show_passwords = shown
-        if hasattr(self, "tree"):
-            for item in self.get_all_row_items():
-                self._render_password(item)
+        self.set_show_passwords(shown)
         if self.history_window:
             self._populate_history(self.history_window, self._history_cache)
 
-    def _render_password(self, item: QTreeWidgetItem) -> None:
-        real = item.data(2, Qt.ItemDataRole.UserRole) or ""
-        item.setText(2, real if self._show_passwords else MASK)
+    def _on_rows_reordered(self, proxy_rows: list, target_proxy_row: int) -> None:
+        if not hasattr(self, "proxy"):
+            return
+        source_rows = []
+        for row in proxy_rows:
+            mapped = self.proxy.mapToSource(self.proxy.index(row, 0))
+            if mapped.isValid():
+                source_rows.append(mapped.row())
+        if not source_rows:
+            return
+        if target_proxy_row >= self.proxy.rowCount():
+            target = self.table_model.rowCount()
+        else:
+            mapped_target = self.proxy.mapToSource(self.proxy.index(target_proxy_row, 0))
+            target = mapped_target.row() if mapped_target.isValid() else self.table_model.rowCount()
+        if self.table_model.move_rows(source_rows, target):
+            self.order_changed.emit(self.table_model.names())
 
-    def _selected_item(self):
-        if not hasattr(self, "tree"):
-            return None
-        items = self.tree.selectedItems()
-        return items[0] if items else None
-
-    def _generate_selected(self) -> None:
-        item = self._selected_item()
-        if item:
-            self.controller.handle_generate_password(item)
-
-    def _history_selected(self) -> None:
-        item = self._selected_item()
-        if item:
-            self.controller.handle_show_history(item)
-
-    def _show_context_menu(self, pos) -> None:
-        item = self.tree.itemAt(pos)
-        if not item or item.text(1) == PLACEHOLDER_NAME:
+    def _show_context_menu(self, pos: QPoint) -> None:
+        if not hasattr(self, "table"):
+            return
+        index = self.table.indexAt(pos)
+        if not index.isValid():
             return
         menu = QMenu(self)
-        gen_action = menu.addAction("生成新密码")
-        copy_action = menu.addAction("复制密码")
+        generate_action = menu.addAction(self.tr("生成新密码"))
+        copy_action = menu.addAction(self.tr("复制密码"))
         menu.addSeparator()
-        history_action = menu.addAction("历史密码")
+        history_action = menu.addAction(self.tr("历史密码"))
         menu.addSeparator()
-        delete_action = menu.addAction("删除")
-        action = menu.exec(self.tree.viewport().mapToGlobal(pos))
-        if action == gen_action:
-            self.controller.handle_generate_password(item)
-        elif action == copy_action:
-            self.controller.handle_copy_password(item)
-        elif action == history_action:
-            self.controller.handle_show_history(item)
-        elif action == delete_action:
-            self.controller.handle_delete_row(item)
+        delete_action = menu.addAction(self.tr("删除"))
+        chosen = menu.exec(self.table.viewport().mapToGlobal(pos))
+        if chosen == generate_action:
+            self.generate_selected_requested.emit()
+        elif chosen == copy_action:
+            self.copy_selected_requested.emit()
+        elif chosen == history_action:
+            self.history_selected_requested.emit()
+        elif chosen == delete_action:
+            self.delete_selected_requested.emit()
 
-    def _on_item_double_clicked(self, item) -> None:
-        if item and item.text(1) != PLACEHOLDER_NAME:
-            self.controller.handle_show_history(item)
-
-    # ===================== 表格数据接口 =====================
-    def clear_table(self) -> None:
-        self.tree.clear()
-
-    def insert_table_row(self, index, name, password, count, rule) -> None:
-        item = QTreeWidgetItem()
-        item.setText(0, str(index))
-        item.setText(1, name)
-        item.setData(2, Qt.ItemDataRole.UserRole, password)
-        item.setText(3, str(count))
-        item.setText(4, rule)
-        self._render_password(item)
-        self.tree.addTopLevelItem(item)
-
-    def update_table_row(self, item, index, name, password, count, rule) -> None:
-        item.setText(0, str(index))
-        item.setText(1, name)
-        item.setData(2, Qt.ItemDataRole.UserRole, password)
-        item.setText(3, str(count))
-        item.setText(4, rule)
-        self._render_password(item)
-
-    def insert_placeholder_row(self) -> None:
-        item = QTreeWidgetItem()
-        item.setText(0, "—")
-        item.setText(1, PLACEHOLDER_NAME)
-        item.setData(2, Qt.ItemDataRole.UserRole, "")
-        item.setText(2, "等待生成")
-        item.setText(3, "0")
-        item.setFlags(Qt.ItemFlag.ItemIsEnabled)
-        self.tree.addTopLevelItem(item)
-
-    def get_all_row_items(self) -> list:
-        return [self.tree.topLevelItem(i) for i in range(self.tree.topLevelItemCount())]
-
-    def get_selected_row_item(self):
-        return self._selected_item()
-
-    def get_row_values(self, item) -> list:
-        return [
-            item.text(0),
-            item.text(1),
-            item.data(2, Qt.ItemDataRole.UserRole) or "",
-            item.text(3),
-            item.text(4),
-        ]
-
-    def refresh_row_numbers(self) -> None:
-        number = 0
-        for item in self.get_all_row_items():
-            if item.text(1) == PLACEHOLDER_NAME:
-                continue
-            number += 1
-            item.setText(0, str(number))
-
-    # ===================== 对话框 =====================
+    # ===================================================== 对话框
     def show_add_subject_dialog(self, callback) -> None:
         dialog = AddSubjectDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             name, length, lower, upper, digit, symbol = dialog.get_data()
             if not name:
-                QMessageBox.warning(self, "警告", "密码主体名称不能为空！")
+                QMessageBox.warning(self, self.tr("警告"), self.tr("密码主体名称不能为空！"))
                 return
             callback(name, length, lower, upper, digit, symbol)
 
@@ -648,11 +710,7 @@ class PasswordManagerView(QMainWindow):
         path, _ = QFileDialog.getOpenFileName(self, title, "", filters)
         return path
 
-    def ask_string(self, title: str, prompt: str) -> str:
-        text, ok = QInputDialog.getText(self, title, prompt)
-        return text if ok else ""
-
-    # ===================== 历史窗口 =====================
+    # ===================================================== 历史窗口
     def show_history_window(self, subject_name, history_data, callbacks) -> None:
         if (
             self.history_window
@@ -662,7 +720,6 @@ class PasswordManagerView(QMainWindow):
             self.history_window.raise_()
             self.history_window.activateWindow()
             return
-
         if self.history_window:
             self.history_window.close()
 
@@ -680,15 +737,14 @@ class PasswordManagerView(QMainWindow):
     def _populate_history(self, window: HistoryWindow, history_data) -> None:
         self._history_cache = history_data
         window.tree.clear()
-        reveal = getattr(window, "show_btn", None)
-        show = bool(reveal and reveal.isChecked())
+        show = window.show_btn.isChecked()
         for index, entry in enumerate(history_data, 1):
             password, count, timestamp = entry
             item = QTreeWidgetItem()
             item.setText(0, str(index))
             item.setData(1, Qt.ItemDataRole.UserRole, password)
             item.setText(1, password if show else MASK)
-            item.setText(2, timestamp or f"第 {count} 次")
+            item.setText(2, timestamp or self.tr("第 %1 次").replace("%1", str(count)))
             window.tree.addTopLevelItem(item)
 
     def update_history_window(self, history_data) -> None:
@@ -705,42 +761,67 @@ class PasswordManagerView(QMainWindow):
             return None
         return {"password": item.data(1, Qt.ItemDataRole.UserRole) or "", "index": index}
 
-    # ===================== 状态与提示 =====================
+    # ===================================================== 主题与状态
+    def apply_theme(self, setting: str) -> None:
+        app = QApplication.instance()
+        if app is not None:
+            app.setStyleSheet(theme.build_stylesheet(setting))
+        for key, action in self._theme_actions.items():
+            action.blockSignals(True)
+            action.setChecked(key == setting)
+            action.blockSignals(False)
+
+    def set_language_checked(self, language: str) -> None:
+        for key, action in self._language_actions.items():
+            action.blockSignals(True)
+            action.setChecked(key == language)
+            action.blockSignals(False)
+
     def show_status(self, message: str, timeout: int = 3000, is_error: bool = False) -> None:
         self.status_bar.showMessage(message, timeout)
 
     def show_info(self, title: str, message: str) -> None:
-        self.show_status(message, 4000)
+        self.status_bar.showMessage(message, 4000)
 
     def show_warning(self, title: str, message: str) -> None:
-        self.show_status(f"⚠ {message}", 5000)
+        self.status_bar.showMessage(f"\u26a0 {message}", 5000)
 
     def show_error(self, title: str, message: str) -> None:
-        self.show_status(message, 8000, is_error=True)
+        self.status_bar.showMessage(message, 8000)
         QMessageBox.critical(self, title, message)
+
+    def set_clipboard_countdown(self, seconds: int) -> None:
+        if seconds > 0:
+            self.clipboard_label.setText(self.tr("剪贴板 %1 秒后清空").replace("%1", str(seconds)))
+        else:
+            self.clipboard_label.setText("")
 
     def _show_shortcuts(self) -> None:
         QMessageBox.information(
             self,
-            "键盘快捷键",
-            "Ctrl+N 新建    Ctrl+O 打开    Ctrl+S 保存    Ctrl+Shift+S 另存为\n"
-            "Ctrl+Z 撤销    Ctrl+Y 重做    Ctrl+C 复制密码    Delete 删除\n"
-            "Ctrl+F 搜索    Ctrl+L 锁定    Ctrl+Q 退出",
+            self.tr("键盘快捷键"),
+            self.tr(
+                "Ctrl+N 新建    Ctrl+O 打开    Ctrl+S 保存    Ctrl+Shift+S 另存为\n"
+                "Ctrl+Z 撤销    Ctrl+Y 重做    Ctrl+G 生成新密码    Ctrl+C 复制\n"
+                "Delete 删除    Ctrl+F 搜索    Ctrl+L 锁定    Ctrl+Q 退出"
+            ),
         )
 
     def _show_about(self) -> None:
         QMessageBox.information(
             self,
-            "关于",
-            "密码管理器\n\n"
-            "本地加密密码管理器：AES-256-GCM + PBKDF2-HMAC-SHA256。\n"
-            "密码不以明文落盘，由「主体名 + 盐」确定性生成。",
+            self.tr("关于"),
+            self.tr(
+                "密码管理器\n\n"
+                "本地加密密码管理器：AES-256-GCM + PBKDF2-HMAC-SHA256。\n"
+                "数据整体加密存储在单个 .sk 文件中。"
+            ),
         )
 
-    # ===================== 窗口标题与脏标记 =====================
+    # ===================================================== 标题与脏标记
     def set_dirty(self, dirty: bool) -> None:
         self._dirty = dirty
-        self.dirty_indicator.setText("● 有未保存的修改" if dirty else "")
+        self.dirty_indicator.setText(self.tr("● 有未保存的修改") if dirty else "")
         self.update_window_title(self._current_path)
 
     def update_window_title(self, file_path: str | None) -> None:
@@ -748,9 +829,9 @@ class PasswordManagerView(QMainWindow):
         if file_path:
             name = os.path.basename(file_path)
             star = " *" if self._dirty else ""
-            self.setWindowTitle(f"密码管理器 — {name}{star}")
+            self.setWindowTitle(self.tr("密码管理器 — %1%2").replace("%1", name).replace("%2", star))
         else:
-            self.setWindowTitle("密码管理器")
+            self.setWindowTitle(self.tr("密码管理器"))
 
     def copy_to_clipboard(self, text: str) -> None:
         QApplication.clipboard().setText(text)

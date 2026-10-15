@@ -79,6 +79,28 @@ class _KeyStream:
             items[i], items[j] = items[j], items[i]
 
 
+def estimate_strength(password: str) -> int:
+    """粗略强度评估，返回 0（空）或 1-5。"""
+    length = len(password)
+    if length == 0:
+        return 0
+    classes = sum(
+        [
+            any(c.islower() for c in password),
+            any(c.isupper() for c in password),
+            any(c.isdigit() for c in password),
+            any(not c.isalnum() for c in password),
+        ]
+    )
+    if length < 8:
+        score = 1
+    elif length < 12:
+        score = min(3, classes)
+    else:
+        score = min(5, 1 + classes + (1 if length >= 16 else 0))
+    return max(1, min(5, score))
+
+
 class PasswordGenerator:
     """确定性密码生成器。"""
 

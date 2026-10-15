@@ -16,6 +16,14 @@ APP_NAME = "PasswordManager"
 CONFIG_FILE = "config.json"
 
 
+def resource_path(*parts: str) -> str:
+    """返回资源绝对路径（兼容 PyInstaller 打包）。"""
+    import sys
+
+    base = getattr(sys, "_MEIPASS", os.path.dirname(os.path.abspath(__file__)))
+    return os.path.join(base, *parts)
+
+
 def app_config_dir() -> Path:
     """返回应用配置目录（不存在则创建）。"""
     base = os.environ.get("APPDATA") or os.path.expanduser("~")

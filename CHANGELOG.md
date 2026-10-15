@@ -4,6 +4,22 @@
 
 ## [Unreleased]
 
+## [0.3.0] - 2026-10-15
+
+### 新增
+- 表格迁移到 **QTableView + QAbstractTableModel + QSortFilterProxyModel**：列排序、实时过滤、多选批量操作。
+- 密码改为**显式加密存储**于库内；生成规则仅用于「重新生成」，不再依赖算法可复现。
+- **CSV 导入 / 导出**（导出为明文，带风险确认与 UTF-8 BOM）。
+- **深色主题**，支持浅色 / 深色 / 跟随系统（theme.py + 模板化 style.qss）。
+- **中 / 英双语界面**（Qt tr() + resources/translations/app_en.qm），「视图 → 语言」切换（重启生效）。
+- 空状态页（QStackedWidget）替代占位行；剪贴板清空倒计时；多选批量复制 / 删除。
+- 表格新增「更新时间」列。
+- mypy 纳入 CI（核心模块）；新增 tag 触发自动构建并发布 Release 的 workflow（含可选代码签名）。
+
+### 变更
+- 删除主体改为批量接口 `delete_subjects`；控制器改为基于行索引操作。
+- 配置新增 `theme` 与 `language` 两项。
+
 ## [0.2.0] - 2026-10-15
 
 ### 安全（破坏性与加固）

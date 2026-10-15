@@ -23,7 +23,9 @@
 
 - **AES-256-GCM（AEAD）** 加密，认证覆盖 nonce，防篡改。
 - **PBKDF2-HMAC-SHA256**，600,000 次迭代，参数随文件保存、可平滑升级。
-- **确定性密码生成**：密码不落盘，只保存生成规则（主体名 + 盐 + 算法版本）。
+- **整体加密存储**：密码随整个库一起被 AES-256-GCM 加密，同时保留生成规则用于「重新生成」。
+- **可排序表格 + 实时搜索**（QTableView / QSortFilterProxyModel），多选批量复制与删除。
+- **CSV 导入 / 导出**、**深色主题**（浅色 / 深色 / 跟随系统）、**中英双语界面**。
 - 旧格式 **v1 / v2 兼容读取**，打开后自动升级为 v3。
 - 撤销/重做、历史密码、拖拽排序、实时搜索。
 - 密码列默认**掩码**，可一键显示；复制到剪贴板 30 秒后自动清空。
@@ -43,7 +45,8 @@
 | 完整性 | GCM tag 覆盖 magic、版本、迭代数、盐、nonce、密文 |
 | 密码生成 | PBKDF2 密钥流 + 拒绝采样（algorithm v2），无 60bit 熵上限 |
 | 落盘内容 | `v3:<base64(header|salt|nonce|tag|ciphertext)>` |
-| 不落盘 | 明文密码、明文主体名以外的任何凭据 |
+| 密码形态 | 运行时在内存中为明文；落盘时随整个库一起被 AEAD 加密 |
+| 明文落盘 | 无。单独的 `.sk` 文件泄露不直接暴露任何密码 |
 
 **威胁模型边界**：本工具防御"密码库文件泄露"与"文件被篡改"。
 它无法防御已被攻陷的操作系统、键盘记录器、内存取证或解锁期间的屏幕窥视。
@@ -117,10 +120,14 @@ set QT_QPA_PLATFORM=offscreen && pytest -q    # Windows
 ├─ model.py                 # 数据与加密编排（不依赖 Qt）
 ├─ view.py                  # PySide6 界面（不含业务逻辑）
 ├─ encryption.py            # VaultCipher(AES-256-GCM) + v1/v2 兼容解密
-├─ password_generator.py    # v2 安全生成器（+ v1 兼容复现）
+├─ password_generator.py    # v2 安全生成器（+ v1 兼容复现 + 强度评估）
+├─ table_model.py           # QAbstractTableModel + 过滤/排序代理
+├─ theme.py                 # 浅色/深色调色板与 QSS 生成
+├─ io_exchange.py           # CSV 导入导出
 ├─ storage.py               # 原子写入、%APPDATA% 配置
 ├─ applog.py                # 滚动日志
-├─ resources/style.qss      # 集中式主题
+├─ resources/style.qss      # 主题模板（占位符由 theme.py 替换）
+├─ resources/translations/  # app_en.ts / app_en.qm（英文翻译）
 ├─ resources/app_icon.png
 ├─ tests/                   # pytest 测试
 └─ docs/                    # 界面效果图与方案文档
@@ -136,8 +143,9 @@ set QT_QPA_PLATFORM=offscreen && pytest -q    # Windows
 - [x] UI 升级：集中主题、掩码、实时搜索、解锁对话框、脏标记
 - [x] 阶段 3：工程化（pyproject、pytest、ruff、CI）
 - [x] 阶段 4：开源文件（README / LICENSE / CHANGELOG / SECURITY / CONTRIBUTING）
-- [ ] 后续：表格迁移到 `QTableView + QAbstractTableModel`、i18n、深色主题、
-      导入/导出 CSV、代码签名与自动发布
+- [x] 阶段 5（v0.3.0）：QTableView/Model/Proxy、CSV 导入导出、深色主题、
+      中英双语、空状态、剪贴板倒计时、mypy 与自动发布 workflow
+- [ ] 后续：代码签名证书、编辑主体（改规则/重命名）、浏览器扩展
 
 详见 [IMPROVEMENT_PLAN.md](IMPROVEMENT_PLAN.md)。
 

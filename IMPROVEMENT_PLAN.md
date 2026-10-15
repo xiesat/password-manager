@@ -2,7 +2,7 @@
 
 > 项目：`D:\System Default\Documents\code\python\password_manager - 副本`
 > 技术栈：Python 3.10 – 3.14（本机 3.14.8） · PySide6 · PyCryptodome · PyInstaller
-> 状态：**阶段 0–4 主体完成并通过验证**；剩余增强项见 §10
+> 状态：**v0.3.0 已发布（阶段 0–5 完成）**；剩余项见 §10
 > 详细附件：[OPTIMIZATION_PLAN.md](OPTIMIZATION_PLAN.md)（后端/安全）、[UI_OPTIMIZATION_PLAN.md](UI_OPTIMIZATION_PLAN.md)（界面）
 
 ---
@@ -207,17 +207,18 @@ pyinstaller 密码管理器.spec
 
 ## 10. 剩余待办（按优先级）
 
-| 优先级 | 事项 | 说明 |
+| 优先级 | 事项 | 状态 |
 |---|---|---|
-| 高 | 处理工作区历史产物 | `dist/new_file.sk` 等已被 gitignore，但**是否删除由你决定**（可能是真实数据） |
-| 高 | 人工验收 | 在真实 Windows 桌面跑一次完整流程（本项目测试为离屏） |
-| 中 | 表格迁移 `QTableView + QAbstractTableModel + QSortFilterProxyModel` | 获得列排序、虚拟化、批量操作；替换占位行 hack |
-| 中 | i18n（`tr()` + `.ts/.qm`）与英文界面 | 面向 GitHub 国际用户 |
-| 中 | 深色主题 | 目前 QSS 为亮色单套 |
-| 中 | 导入/导出 CSV/JSON | 便于迁移与外部备份 |
-| 低 | mypy 严格化 | 配置已就绪，尚未纳入 CI |
-| 低 | 空状态 `QStackedWidget`、剪贴板倒计时可视化 | 体验细节 |
-| 低 | 自动发布 Action（tag → 构建 exe → Release） | 可选 |
+| 高 | 处理工作区历史产物（`dist/new_file.sk` 等） | 仍由你决定（可能是真实数据） |
+| 高 | 真实 Windows 桌面人工验收 | 仍建议执行 |
+| 中 | 表格迁移 QTableView + Model + Proxy | ✅ v0.3.0 完成 |
+| 中 | 显式密码存储（消除算法脆弱性） | ✅ v0.3.0 完成 |
+| 中 | i18n（tr() + .ts/.qm）与英文界面 | ✅ v0.3.0 完成 |
+| 中 | 深色主题 + 跟随系统 | ✅ v0.3.0 完成 |
+| 中 | CSV 导入 / 导出 | ✅ v0.3.0 完成（JSON 未做） |
+| 低 | mypy 纳入 CI（核心模块） | ✅ v0.3.0 完成（GUI 模块待补） |
+| 低 | 空状态 QStackedWidget、剪贴板倒计时 | ✅ v0.3.0 完成 |
+| 低 | 自动发布 Action（tag → 构建 exe → Release，含可选签名） | ✅ v0.3.0 完成（签名需自备证书） |
 
 ---
 

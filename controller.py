@@ -1,6 +1,6 @@
 """控制器层 (Controller)。
 
-负责把视图事件转成模型操作，并管理文件、剪贴板、备份与自动加载。
+把视图事件转成模型操作，并管理文件、剪贴板、备份、主题与语言。
 """
 
 from __future__ import annotations
@@ -12,10 +12,12 @@ import os
 import re
 from datetime import datetime
 
-from PySide6.QtCore import QTimer
+from PySide6.QtCore import QObject, QTimer
 from PySide6.QtWidgets import QApplication
 
+import io_exchange
 import storage
+import theme
 from model import PasswordManagerModel
 from view import PasswordManagerView
 
@@ -24,74 +26,106 @@ logger = logging.getLogger(__name__)
 BACKUP_FOLDER = ".password_manager_backups"
 BACKUP_PATTERN = re.compile(r"_(\d{8}_\d{6})\.tmp$")
 KEEP_BACKUPS = 10
-CLIPBOARD_CLEAR_MS = 30_000
+CLIPBOARD_SECONDS = 30
 
 
-class PasswordManagerController:
+class PasswordManagerController(QObject):
     """连接模型与视图，处理所有业务流程。"""
 
     def __init__(self) -> None:
+        super().__init__()
         self.model = PasswordManagerModel()
         self.view = PasswordManagerView()
         self.view.set_controller(self)
 
-        self._session_key = ""  # 本次会话的密钥（仅内存）
+        self._session_key = ""
         self._last_copied_text = ""
+        self.clipboard_seconds = 0
 
-        self.clipboard_timer = QTimer()
-        self.clipboard_timer.setSingleShot(True)
-        self.clipboard_timer.timeout.connect(self._clear_clipboard)
+        self.clipboard_tick = QTimer(self)
+        self.clipboard_tick.setInterval(1000)
+        self.clipboard_tick.timeout.connect(self._on_clipboard_tick)
 
         self.history_undo_stack: list = []
         self.history_redo_stack: list = []
         self.current_history_subject: str | None = None
 
         self._connect_signals()
+        self.view.apply_theme(theme.load_setting())
+        self.view.set_language_checked(self._language())
         self.view.show()
         QTimer.singleShot(0, self._auto_load_last_file)
 
     # ===================== 信号 =====================
     def _connect_signals(self) -> None:
-        v = self.view
-        v.new_file_requested.connect(self.handle_new_file)
-        v.open_file_requested.connect(self.handle_open_file)
-        v.save_file_requested.connect(self.handle_save_file)
-        v.save_as_requested.connect(self.handle_save_as)
-        v.add_subject_requested.connect(self.handle_add_subject)
-        v.clear_all_requested.connect(self.handle_clear_all)
-        v.copy_selected_requested.connect(self.handle_copy_selected)
-        v.delete_selected_requested.connect(self.handle_delete_selected)
-        v.undo_requested.connect(self.handle_undo)
-        v.redo_requested.connect(self.handle_redo)
-        v.lock_requested.connect(self.handle_lock)
+        view = self.view
+        view.new_file_requested.connect(self.handle_new_file)
+        view.open_file_requested.connect(self.handle_open_file)
+        view.save_file_requested.connect(self.handle_save_file)
+        view.save_as_requested.connect(self.handle_save_as)
+        view.import_csv_requested.connect(self.handle_import_csv)
+        view.export_csv_requested.connect(self.handle_export_csv)
+        view.add_subject_requested.connect(self.handle_add_subject)
+        view.clear_all_requested.connect(self.handle_clear_all)
+        view.generate_selected_requested.connect(self.handle_generate_selected)
+        view.copy_selected_requested.connect(self.handle_copy_selected)
+        view.delete_selected_requested.connect(self.handle_delete_selected)
+        view.history_selected_requested.connect(self.handle_history_selected)
+        view.undo_requested.connect(self.handle_undo)
+        view.redo_requested.connect(self.handle_redo)
+        view.lock_requested.connect(self.handle_lock)
+        view.order_changed.connect(self.handle_order_changed)
+        view.theme_changed.connect(self.handle_theme_changed)
+        view.language_changed.connect(self.handle_language_changed)
+
+    # ===================== 设置 =====================
+    def _language(self) -> str:
+        value = str(storage.load_config().get("language", "zh"))
+        return value if value in ("zh", "en") else "zh"
+
+    def handle_theme_changed(self, setting: str) -> None:
+        theme.save_setting(setting)
+        self.view.apply_theme(setting)
+        self.view.show_status(self.tr("主题已切换"), 2000)
+
+    def handle_language_changed(self, language: str) -> None:
+        config = storage.load_config()
+        config["language"] = language
+        storage.save_config(config)
+        self.view.set_language_checked(language)
+        self.view.show_status(self.tr("语言已保存，重启后生效"), 4000)
 
     # ===================== 密钥 =====================
     def _require_key(self) -> str:
         if self._session_key:
             return self._session_key
-        key = self.view.ask_key("输入密钥", "请输入密钥：")
+        key = self.view.ask_key(self.tr("输入密钥"), self.tr("请输入密钥："))
         if key:
             self._session_key = key
         return key
 
     # ===================== 文件操作 =====================
     def handle_new_file(self) -> None:
-        path = self.view.ask_save_file_path("创建密钥文件", ".sk", [("sk加密文件", "*.sk")], "new_file")
+        path = self.view.ask_save_file_path(
+            self.tr("创建密钥文件"), ".sk", [(self.tr("sk加密文件"), "*.sk")], "new_file"
+        )
         if not path:
             return
 
-        key = self.view.ask_key("设置密钥", "为新建的密钥文件设置密钥。", confirm=True)
+        key = self.view.ask_key(
+            self.tr("设置密钥"),
+            self.tr("为新建的密钥文件设置密钥。"),
+            confirm=True,
+        )
         if not key:
             return
 
         try:
-            from storage import atomic_write_text
-
             encrypted = self.model.encrypt_data(key, {"mainData": [], "historyData": {}})
-            atomic_write_text(path, encrypted)
+            storage.atomic_write_text(path, encrypted)
         except Exception as exc:  # noqa: BLE001
             logger.exception("新建文件失败")
-            self.view.show_error("错误", f"文件创建失败：{exc}")
+            self.view.show_error(self.tr("错误"), self.tr("文件创建失败：%1").replace("%1", str(exc)))
             return
 
         self._session_key = key
@@ -100,48 +134,49 @@ class PasswordManagerController:
         self.view.switch_to_main_interface()
         self.view.update_window_title(path)
         self.view.set_dirty(False)
-        self._refresh_table_from_model()
+        self._reload()
         self._ensure_backup_folder(path)
-        self.view.show_status(f"新文件已创建：{os.path.basename(path)}", 3000)
+        self.view.show_status(self.tr("新文件已创建：%1").replace("%1", os.path.basename(path)), 3000)
 
     def handle_open_file(self) -> None:
-        path = self.view.ask_open_file_path("选择sk加密文件", [("sk加密文件", "*.sk")])
+        path = self.view.ask_open_file_path(self.tr("选择sk加密文件"), [(self.tr("sk加密文件"), "*.sk")])
         if not path:
             return
         if not path.endswith(".sk"):
-            self.view.show_warning("警告", "请选择合法的 .sk 格式文件！")
+            self.view.show_warning(self.tr("警告"), self.tr("请选择合法的 .sk 格式文件！"))
             return
         self._open_path(path)
 
     def _open_path(self, path: str, *, save_path: str | None = None, recovered: str | None = None) -> bool:
-        """读取并解锁文件。save_path 不为空时用于"从备份恢复"。"""
         try:
             content = storage.read_text(path)
         except OSError as exc:
-            self.view.show_error("错误", f"文件读取失败：{exc}")
+            self.view.show_error(self.tr("错误"), self.tr("文件读取失败：%1").replace("%1", str(exc)))
             return False
 
         ok, message, version = self.model.detect_and_store(content)
         if not ok:
-            self.view.show_error("文件校验失败", message)
+            self.view.show_error(self.tr("文件校验失败"), message)
             return False
 
-        hint = f"请输入密钥以解锁：\n{os.path.basename(path)}"
+        hint = self.tr("请输入密钥以解锁：\n%1").replace("%1", os.path.basename(path))
         if version < 3:
-            hint += f"\n\n（检测到旧版 v{version} 格式，解锁后将按 v3 重新保存）"
+            hint += "\n\n" + self.tr("（检测到旧版 v%1 格式，解锁后将按 v3 重新保存）").replace(
+                "%1", str(version)
+            )
 
-        key = self.view.ask_key("解锁密钥库", hint)
+        key = self.view.ask_key(self.tr("解锁密钥库"), hint)
         if not key:
             return False
         if not self.model.decrypt_with_user_key(key):
-            self.view.show_error("解锁失败", "密钥不正确或文件已损坏！")
+            self.view.show_error(self.tr("解锁失败"), self.tr("密钥不正确或文件已损坏！"))
             return False
 
         try:
             upgraded = self.model.load_data_from_decrypted_json()
         except Exception as exc:  # noqa: BLE001
             logger.exception("解析解密数据失败")
-            self.view.show_error("打开失败", f"数据解析错误：{exc}")
+            self.view.show_error(self.tr("打开失败"), self.tr("数据解析错误：%1").replace("%1", str(exc)))
             return False
 
         target = save_path or path
@@ -150,7 +185,7 @@ class PasswordManagerController:
         self.view.switch_to_main_interface()
         self.view.update_window_title(target)
         self.view.set_dirty(bool(upgraded))
-        self._refresh_table_from_model()
+        self._reload()
         self._ensure_backup_folder(target)
 
         if recovered and os.path.exists(recovered):
@@ -160,9 +195,11 @@ class PasswordManagerController:
                 logger.warning("删除已恢复的备份失败：%s", exc)
 
         if upgraded:
-            self.view.show_status(f"已升级 {upgraded} 条旧规则，请重新保存", 6000)
+            self.view.show_status(
+                self.tr("已修正 %1 条旧记录，请重新保存").replace("%1", str(upgraded)), 6000
+            )
         else:
-            self.view.show_status("解锁成功", 3000)
+            self.view.show_status(self.tr("解锁成功"), 3000)
         return True
 
     def handle_save_file(self) -> None:
@@ -174,13 +211,15 @@ class PasswordManagerController:
     def handle_save_as(self) -> None:
         key = self._require_key()
         if not key:
-            self.view.show_warning("提示", "请输入密钥！")
+            self.view.show_warning(self.tr("提示"), self.tr("请输入密钥！"))
             return
         if not self.model.main_data and not self.model.history_data:
-            self.view.show_warning("提示", "无数据可导出")
+            self.view.show_warning(self.tr("提示"), self.tr("无数据可导出"))
             return
 
-        path = self.view.ask_save_file_path("另存为", ".sk", [("sk加密文件", "*.sk")], "密钥数据")
+        path = self.view.ask_save_file_path(
+            self.tr("另存为"), ".sk", [(self.tr("sk加密文件"), "*.sk")], "密钥数据"
+        )
         if not path:
             return
         self._write_current(path, new_path=True)
@@ -188,14 +227,14 @@ class PasswordManagerController:
     def _write_current(self, path: str, *, new_path: bool = False) -> bool:
         key = self._require_key()
         if not key:
-            self.view.show_warning("提示", "请输入密钥！")
+            self.view.show_warning(self.tr("提示"), self.tr("请输入密钥！"))
             return False
         try:
             encrypted = self.model.encrypt_data(key, self.model.prepare_export_data())
             storage.atomic_write_text(path, encrypted)
         except Exception as exc:  # noqa: BLE001
             logger.exception("保存失败")
-            self.view.show_error("保存失败", str(exc))
+            self.view.show_error(self.tr("保存失败"), str(exc))
             return False
 
         if new_path:
@@ -204,12 +243,12 @@ class PasswordManagerController:
         self.model.mark_clean()
         self.view.update_window_title(path)
         self.view.set_dirty(False)
-        self.view.show_status(f"数据已保存至：{os.path.basename(path)}", 4000)
+        self.view.show_status(self.tr("数据已保存至：%1").replace("%1", os.path.basename(path)), 4000)
         return True
 
     def handle_lock(self) -> None:
         if self.model.is_dirty() and not self.view.ask_yes_no(
-            "未保存的修改", "当前有未保存的修改，锁定后将丢失。确定继续吗？"
+            self.tr("未保存的修改"), self.tr("当前有未保存的修改，锁定后将丢失。确定继续吗？")
         ):
             return
         self._session_key = ""
@@ -218,7 +257,57 @@ class PasswordManagerController:
         self.model.set_current_file_path(None)
         self.view.reset_to_initial()
         self.view.set_dirty(False)
-        self.view.show_status("已锁定", 2000)
+        self.view.show_status(self.tr("已锁定"), 2000)
+
+    # ===================== CSV =====================
+    def handle_export_csv(self) -> None:
+        if not self.model.main_data:
+            self.view.show_warning(self.tr("提示"), self.tr("无数据可导出"))
+            return
+        if not self.view.ask_yes_no(
+            self.tr("导出 CSV"),
+            self.tr("CSV 是明文文件，其中的密码不加密。\n确定要导出吗？"),
+        ):
+            return
+        path = self.view.ask_save_file_path(
+            self.tr("导出 CSV"), ".csv", [(self.tr("CSV 文件"), "*.csv")], "passwords"
+        )
+        if not path:
+            return
+        try:
+            io_exchange.export_csv(path, self.model.export_rows())
+        except OSError as exc:
+            self.view.show_error(self.tr("导出失败"), str(exc))
+            return
+        self.view.show_status(
+            self.tr("已导出 %1 条到 CSV").replace("%1", str(len(self.model.main_data))), 4000
+        )
+
+    def handle_import_csv(self) -> None:
+        path = self.view.ask_open_file_path(self.tr("导入 CSV"), [(self.tr("CSV 文件"), "*.csv")])
+        if not path:
+            return
+        try:
+            rows = io_exchange.import_csv(path)
+        except (OSError, ValueError) as exc:
+            self.view.show_error(self.tr("导入失败"), str(exc))
+            return
+        if not rows:
+            self.view.show_warning(self.tr("提示"), self.tr("CSV 中没有可导入的数据"))
+            return
+
+        imported = 0
+        for row in rows:
+            self.model.add_or_update_subject(
+                row["name"],
+                password=row.get("password") or None,
+                rule=row.get("rule") or None,
+                count=row.get("count") or "0",
+                updated_at=row.get("updated_at") or None,
+            )
+            imported += 1
+        self._reload()
+        self.view.show_status(self.tr("已导入 %1 条记录").replace("%1", str(imported)), 4000)
 
     # ===================== 主表格 =====================
     def handle_add_subject(self) -> None:
@@ -226,87 +315,75 @@ class PasswordManagerController:
             self.model.add_or_update_subject(
                 name, length=length, lower=lower, upper=upper, digit=digit, symbol=symbol
             )
-            self._refresh_table_from_model()
-            self.view.show_status(f"密码主体“{name}”已添加并生成密码", 3000)
+            self._reload()
+            self.view.show_status(self.tr("密码主体“%1”已添加并生成密码").replace("%1", name), 3000)
 
         self.view.show_add_subject_dialog(on_confirm)
 
     def handle_clear_all(self) -> None:
-        if self.view.ask_yes_no("确认", "确定要清空所有数据吗？此操作不可撤销（可用 Ctrl+Z 尝试恢复）。"):
+        if self.view.ask_yes_no(
+            self.tr("确认"), self.tr("确定要清空所有数据吗？此操作可用 Ctrl+Z 尝试恢复。")
+        ):
             self.model.clear_all_data()
-            self._refresh_table_from_model()
-            self.view.show_status("所有数据已清空", 3000)
+            self._reload()
+            self.view.show_status(self.tr("所有数据已清空"), 3000)
 
-    def handle_generate_password(self, item) -> None:
-        items = self.view.get_all_row_items()
-        if item not in items:
+    def handle_generate_selected(self) -> None:
+        indexes = self.view.selected_row_indexes()
+        if not indexes:
+            self.view.show_warning(self.tr("提示"), self.tr("请先选择一行"))
             return
-        index = items.index(item)
-        result = self.model.generate_new_password_for_subject(index)
-        if not result:
-            return
-        new_pwd, new_count = result
-        values = self.view.get_row_values(item)
-        self.view.update_table_row(
-            item, values[0], values[1], new_pwd, new_count, self.model.main_data[index]["rule"]
-        )
-        self.view.show_status(f"已生成第 {new_count} 个密码", 3000)
-
-    def handle_copy_password(self, item) -> None:
-        values = self.view.get_row_values(item)
-        if values[2]:
-            self._copy_to_clipboard_with_timer(values[2])
-
-    def handle_delete_row(self, item) -> None:
-        items = self.view.get_all_row_items()
-        if item not in items:
-            return
-        index = items.index(item)
-        name = self.model.main_data[index]["name"]
-        self.model.delete_subject(index)
-        self._refresh_table_from_model()
-        self.view.show_status(f"密码主体“{name}”已删除", 3000)
+        for index in indexes:
+            self.model.generate_new_password_for_subject(index)
+        self._reload()
+        self.view.show_status(self.tr("已为 %1 个主体生成新密码").replace("%1", str(len(indexes))), 3000)
 
     def handle_copy_selected(self) -> None:
-        item = self.view.get_selected_row_item()
-        if item:
-            self.handle_copy_password(item)
+        rows = self.view.selected_row_indexes()
+        if not rows:
+            self.view.show_warning(self.tr("提示"), self.tr("请先选择一行"))
+            return
+        passwords = [self.model.main_data[i]["password"] for i in rows]
+        self._copy_to_clipboard_with_timer("\n".join(passwords))
 
     def handle_delete_selected(self) -> None:
-        item = self.view.get_selected_row_item()
-        if item:
-            self.handle_delete_row(item)
+        rows = self.view.selected_row_indexes()
+        if not rows:
+            self.view.show_warning(self.tr("提示"), self.tr("请先选择一行"))
+            return
+        if len(rows) > 1 and not self.view.ask_yes_no(
+            self.tr("确认"), self.tr("确定删除选中的 %1 个主体？").replace("%1", str(len(rows)))
+        ):
+            return
+        removed = self.model.delete_subjects(rows)
+        self._reload()
+        self.view.show_status(self.tr("已删除 %1 个主体").replace("%1", str(len(removed))), 3000)
 
-    def handle_row_reorder(self) -> None:
-        names = []
-        for item in self.view.get_all_row_items():
-            name = self.view.get_row_values(item)[1]
-            if name and name != "暂无密码主体":
-                names.append(name)
-        self.model.reorder_subjects(names)
-        self.view.refresh_row_numbers()
-        self.view.show_status("排序已更新", 2000)
+    def handle_order_changed(self, names: list) -> None:
+        self.model.reorder_subjects([str(n) for n in names])
+        self.view.show_status(self.tr("排序已更新"), 2000)
 
     # ===================== 撤销/重做 =====================
     def handle_undo(self) -> None:
         if self.model.undo():
-            self._refresh_table_from_model()
-            self.view.show_status("已撤销", 2000)
+            self._reload()
+            self.view.show_status(self.tr("已撤销"), 2000)
         else:
-            self.view.show_status("无操作可撤销", 2000)
+            self.view.show_status(self.tr("无操作可撤销"), 2000)
 
     def handle_redo(self) -> None:
         if self.model.redo():
-            self._refresh_table_from_model()
-            self.view.show_status("已重做", 2000)
+            self._reload()
+            self.view.show_status(self.tr("已重做"), 2000)
         else:
-            self.view.show_status("无操作可重做", 2000)
+            self.view.show_status(self.tr("无操作可重做"), 2000)
 
     # ===================== 历史窗口 =====================
-    def handle_show_history(self, item) -> None:
-        subject_name = self.view.get_row_values(item)[1]
-        if not subject_name or subject_name == "暂无密码主体":
+    def handle_history_selected(self) -> None:
+        index = self.view.selected_row()
+        if index is None or not (0 <= index < len(self.model.main_data)):
             return
+        subject_name = self.model.main_data[index]["name"]
         self.current_history_subject = subject_name
         history = self.model.get_history_for_subject(subject_name)
 
@@ -340,49 +417,55 @@ class PasswordManagerController:
         selection = self.view.get_history_selection(tree)
         if not selection:
             return
-        if not self.view.ask_yes_no("确认", "确定删除该历史密码？"):
+        if not self.view.ask_yes_no(self.tr("确认"), self.tr("确定删除该历史密码？")):
             return
         self._save_history_state()
         self.model.delete_history_entry(self.current_history_subject, selection["index"])
         self.view.update_history_window(self.model.get_history_for_subject(self.current_history_subject))
-        self.view.show_status("历史密码已删除", 3000)
+        self.view.show_status(self.tr("历史密码已删除"), 3000)
 
     def handle_history_undo(self, tree) -> None:
         if len(self.history_undo_stack) <= 1:
-            self.view.show_status("无历史操作可撤销", 2000)
+            self.view.show_status(self.tr("无历史操作可撤销"), 2000)
             return
         self.history_redo_stack.append(self.history_undo_stack.pop())
         self._restore_history_state(self.history_undo_stack[-1])
-        self.view.show_status("已撤销", 2000)
+        self.view.show_status(self.tr("已撤销"), 2000)
 
     def handle_history_redo(self, tree) -> None:
         if not self.history_redo_stack:
-            self.view.show_status("无历史操作可重做", 2000)
+            self.view.show_status(self.tr("无历史操作可重做"), 2000)
             return
         state = self.history_redo_stack.pop()
         self.history_undo_stack.append(state)
         self._restore_history_state(state)
-        self.view.show_status("已重做", 2000)
+        self.view.show_status(self.tr("已重做"), 2000)
 
     # ===================== 辅助 =====================
-    def _refresh_table_from_model(self) -> None:
-        self.view.clear_table()
-        if not self.model.main_data:
-            self.view.insert_placeholder_row()
-        else:
-            for index, item in enumerate(self.model.main_data, 1):
-                self.view.insert_table_row(index, item["name"], item["password"], item["count"], item["rule"])
+    def _reload(self) -> None:
+        self.view.load_rows(self.model.export_rows())
 
     def _copy_to_clipboard_with_timer(self, text: str) -> None:
         self.view.copy_to_clipboard(text)
         self._last_copied_text = text
-        self.clipboard_timer.start(CLIPBOARD_CLEAR_MS)
-        self.view.show_status("密码已复制到剪贴板（30 秒后自动清空）", 3000)
+        self.clipboard_seconds = CLIPBOARD_SECONDS
+        self.view.set_clipboard_countdown(self.clipboard_seconds)
+        self.clipboard_tick.start()
+        self.view.show_status(
+            self.tr("已复制到剪贴板（%1 秒后自动清空）").replace("%1", str(CLIPBOARD_SECONDS)), 3000
+        )
 
-    def _clear_clipboard(self) -> None:
-        if QApplication.clipboard().text() == self._last_copied_text:
-            QApplication.clipboard().clear()
+    def _on_clipboard_tick(self) -> None:
+        self.clipboard_seconds -= 1
+        if self.clipboard_seconds > 0:
+            self.view.set_clipboard_countdown(self.clipboard_seconds)
+            return
+        self.clipboard_tick.stop()
+        clipboard = QApplication.clipboard()
+        if clipboard.text() == self._last_copied_text:
+            clipboard.clear()
         self._last_copied_text = ""
+        self.view.set_clipboard_countdown(0)
 
     # ===================== 备份与自动加载 =====================
     def _ensure_backup_folder(self, file_path: str) -> None:
@@ -400,7 +483,6 @@ class PasswordManagerController:
 
     @staticmethod
     def _extract_timestamp_from_backup(backup_path: str) -> datetime:
-        """从 名称_YYYYMMDD_HHMMSS.tmp 中提取时间戳（用正则，避免文件名含下划线出错）。"""
         match = BACKUP_PATTERN.search(os.path.basename(backup_path))
         if match:
             try:
@@ -446,8 +528,10 @@ class PasswordManagerController:
             latest = backups[-1]
             when = self._extract_timestamp_from_backup(latest).strftime("%Y-%m-%d %H:%M:%S")
             if self.view.ask_yes_no(
-                "恢复备份",
-                f"检测到未保存的备份文件：\n{os.path.basename(latest)}\n备份时间：{when}\n\n是否恢复？",
+                self.tr("恢复备份"),
+                self.tr("检测到未保存的备份文件：\n%1\n备份时间：%2\n\n是否恢复？")
+                .replace("%1", os.path.basename(latest))
+                .replace("%2", when),
             ):
                 path_to_read, recovered = latest, latest
 

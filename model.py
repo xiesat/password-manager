@@ -2,6 +2,15 @@
 
 负责密码主体、历史记录、加解密文件、撤销/重做、备份与变更追踪。
 不依赖任何 GUI 组件，可独立单元测试。
+
+数据项结构：
+    {
+        "name": str,        # 主体名（同时是 v2 生成算法的输入）
+        "password": str,    # 明文密码；导出时随整个库一起被 AES-256-GCM 加密
+        "count": str,       # 生成次数
+        "rule": str,        # 生成规则，用于"重新生成"
+        "updated_at": str,  # 最近更新时间
+    }
 """
 
 from __future__ import annotations
@@ -28,13 +37,16 @@ UNDO_LIMIT = 100
 MIN_LENGTH = 4
 MAX_LENGTH = 128
 RULE_ALGORITHMS = (ALGORITHM_V1, ALGORITHM_V2)
+DEFAULT_RULE_LENGTH = 16
+PLACEHOLDER_PASSWORD = "等待生成"
+
+
+def _now() -> str:
+    return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
 
 def parse_rule(rule_str: str) -> dict | None:
-    """解析规则字符串；无法识别时返回 None。
-
-    兼容三种形态（见 password_generator 模块文档）。
-    """
+    """解析规则字符串；无法识别时返回 None。"""
     parts = rule_str.split("|")
     if len(parts) == 5:
         length, lower, upper, digit, symbol = parts
@@ -74,7 +86,7 @@ def build_rule(
     salt: str,
     algorithm: str,
 ) -> str:
-    """由参数构造规则字符串（v2 形态）。"""
+    """由参数构造规则字符串。"""
     return f"{length}|{lower}|{upper}|{digit}|{symbol}|{salt}|{algorithm}"
 
 
@@ -82,31 +94,25 @@ class PasswordManagerModel:
     """密码管理器核心数据模型。"""
 
     def __init__(self) -> None:
-        # ---------- 旧格式兼容所需 ----------
-        self.file_verify_key = "F_Y"  # 仅用于读取 v1/v2 旧文件，不再用于写入
+        self.file_verify_key = "F_Y"  # 仅用于读取 v1/v2 旧文件
         self.file_format_version = 3
 
-        self._raw_content = ""  # 原始文件内容（v3/v2）
-        self._outer_legacy = ""  # v1 外层解密后的内容
-        self.raw_decrypted_data = ""  # 最终解密出的 JSON 字符串
+        self._raw_content = ""
+        self._outer_legacy = ""
+        self.raw_decrypted_data = ""
 
-        # ---------- 业务数据 ----------
         self.main_data: list[dict] = []
         self.history_data: dict[str, list] = {}
 
-        # ---------- 撤销/重做 ----------
         self.undo_stack: list[dict] = []
         self.redo_stack: list[dict] = []
 
-        # ---------- 文件 ----------
         self.current_file_path: str | None = None
 
-        # ---------- 生成器 ----------
         self.pwd_generator = PasswordGenerator()
 
-        # ---------- 变更追踪 ----------
         self._dirty = False
-        self._last_saved_state = None
+        self._last_saved_state: dict | None = None
 
     # ===================== 变更追踪 =====================
     def _mark_dirty(self) -> None:
@@ -152,7 +158,6 @@ class PasswordManagerModel:
             self._raw_content = content
             return True, "v2 文件格式", 2
 
-        # v1
         if len(content) < 24:
             return False, "文件长度异常，不是合法 sk 文件", 1
         try:
@@ -189,7 +194,7 @@ class PasswordManagerModel:
                     return False
                 self.raw_decrypted_data = decrypted[: -len("DATA_CHECK")]
             return True
-        except Exception as exc:  # noqa: BLE001 - 统一转为布尔结果
+        except Exception as exc:  # noqa: BLE001
             logger.warning("解密失败（格式 v%s）：%s", self.file_format_version, exc)
             return False
 
@@ -201,8 +206,19 @@ class PasswordManagerModel:
         return VaultCipher(user_key).encrypt(plaintext)
 
     # ===================== 数据加载与导出 =====================
+    def _default_rule(self) -> str:
+        return build_rule(
+            DEFAULT_RULE_LENGTH,
+            True,
+            True,
+            True,
+            True,
+            self.pwd_generator.random_salt(),
+            ALGORITHM_V2,
+        )
+
     def load_data_from_decrypted_json(self) -> int:
-        """解析解密后的 JSON，填充数据。返回被升级为 v2 的旧规则数量。"""
+        """解析解密后的 JSON，填充数据。返回需要重新保存的条目数。"""
         data_dict = json.loads(self.raw_decrypted_data)
         self.main_data = []
         self.history_data = data_dict.get("historyData", {}) or {}
@@ -212,16 +228,16 @@ class PasswordManagerModel:
             name = item.get("密码生成主体", "")
             count = str(item.get("第n次生成的密码", "0"))
             rule_str = item.get("规则", "")
-            if not name or not rule_str:
+            stored = item.get("密码", "")
+            updated_at = item.get("更新时间", "")
+            if not name:
                 continue
 
-            spec = parse_rule(rule_str)
+            spec = parse_rule(rule_str) if rule_str else None
             if spec is None:
-                logger.warning("跳过无法解析的规则：%s", rule_str)
-                continue
-
-            if spec["algorithm"] == ALGORITHM_V1 and not spec["salt"]:
-                # 旧的无盐规则本身不可复现（每次加载都会变），升级为 v2 并标记待保存
+                rule_str = self._default_rule()
+                upgraded += 1
+            elif spec["algorithm"] == ALGORITHM_V1 and not spec["salt"]:
                 result = self.pwd_generator.generate(
                     name,
                     length=spec["length"],
@@ -241,70 +257,127 @@ class PasswordManagerModel:
                     result["salt"],
                     ALGORITHM_V2,
                 )
-                password = result["password"]
                 upgraded += 1
-            else:
-                result = self.pwd_generator.generate(
-                    name,
-                    length=spec["length"],
-                    lower=spec["lower"],
-                    upper=spec["upper"],
-                    digit=spec["digit"],
-                    symbol=spec["symbol"],
-                    salt=spec["salt"] or None,
-                    algorithm=spec["algorithm"],
-                )
-                password = result["password"]
 
-            self.main_data.append({"name": name, "password": password, "count": count, "rule": rule_str})
+            password = stored if stored and stored != PLACEHOLDER_PASSWORD else ""
+            if not password:
+                spec = parse_rule(rule_str)
+                if spec is not None:
+                    password = self.pwd_generator.generate(
+                        name,
+                        length=spec["length"],
+                        lower=spec["lower"],
+                        upper=spec["upper"],
+                        digit=spec["digit"],
+                        symbol=spec["symbol"],
+                        salt=spec["salt"] or None,
+                        algorithm=spec["algorithm"],
+                    )["password"]
+                else:
+                    password = self.pwd_generator.generate(
+                        name,
+                        length=DEFAULT_RULE_LENGTH,
+                        lower=True,
+                        upper=True,
+                        digit=True,
+                        symbol=True,
+                        salt=None,
+                        algorithm=ALGORITHM_V2,
+                    )["password"]
+
+            self.main_data.append(
+                {
+                    "name": name,
+                    "password": password,
+                    "count": count,
+                    "rule": rule_str,
+                    "updated_at": updated_at,
+                }
+            )
 
         self.mark_clean()
         if upgraded:
-            # 升级后的规则需要落盘，因此仍标记为"有未保存修改"
-            logger.info("已将 %d 条无盐旧规则升级为 v2，需要重新保存", upgraded)
+            logger.info("%d 条规则被补全/升级，需要重新保存", upgraded)
             self._dirty = True
         return upgraded
 
     def prepare_export_data(self) -> dict:
-        """准备导出数据：只保存规则与历史，不落盘明文密码。"""
+        """准备导出数据；密码随整个库一起被 AES-256-GCM 加密后落盘。"""
         export_main = [
             {
                 "密码生成主体": item["name"],
+                "密码": item["password"],
                 "第n次生成的密码": item["count"],
                 "规则": item["rule"],
+                "更新时间": item.get("updated_at", ""),
             }
             for item in self.main_data
         ]
         return {"mainData": export_main, "historyData": self.history_data}
+
+    def export_rows(self) -> list[dict]:
+        """导出为通用行结构（供 CSV 等使用）。"""
+        return [
+            {
+                "name": item["name"],
+                "password": item["password"],
+                "count": item["count"],
+                "updated_at": item.get("updated_at", ""),
+                "rule": item["rule"],
+            }
+            for item in self.main_data
+        ]
 
     # ===================== 主数据操作 =====================
     def add_or_update_subject(
         self,
         name: str,
         *,
-        length: int = 12,
+        length: int = DEFAULT_RULE_LENGTH,
         lower: bool = True,
         upper: bool = True,
         digit: bool = True,
         symbol: bool = True,
+        password: str | None = None,
+        rule: str | None = None,
+        count: str = "0",
+        updated_at: str | None = None,
     ) -> dict:
-        """新增（或同名覆盖）密码主体，并立即生成 v2 密码。"""
-        result = self.pwd_generator.generate(
-            name,
-            length=length,
-            lower=lower,
-            upper=upper,
-            digit=digit,
-            symbol=symbol,
-            salt=None,
-            algorithm=ALGORITHM_V2,
-        )
-        rule_str = build_rule(length, lower, upper, digit, symbol, result["salt"], ALGORITHM_V2)
+        """新增（或同名覆盖）主体。
+
+        password 为空时按规则生成；传入 password 时直接采用（用于导入）。
+        """
+        if password:
+            used_password = password
+            used_rule = rule or build_rule(
+                length,
+                lower,
+                upper,
+                digit,
+                symbol,
+                self.pwd_generator.random_salt(),
+                ALGORITHM_V2,
+            )
+        else:
+            result = self.pwd_generator.generate(
+                name,
+                length=length,
+                lower=lower,
+                upper=upper,
+                digit=digit,
+                symbol=symbol,
+                salt=None,
+                algorithm=ALGORITHM_V2,
+            )
+            used_password = result["password"]
+            used_rule = rule or build_rule(length, lower, upper, digit, symbol, result["salt"], ALGORITHM_V2)
+
         new_item = {
             "name": name,
-            "password": result["password"],
-            "count": "0",
-            "rule": rule_str,
+            "password": used_password,
+            "count": str(count),
+            "rule": used_rule,
+            "updated_at": updated_at or _now(),
         }
 
         for index, item in enumerate(self.main_data):
@@ -318,23 +391,28 @@ class PasswordManagerModel:
         self._save_state()
         return new_item
 
-    def delete_subject(self, index: int) -> bool:
-        if 0 <= index < len(self.main_data):
+    def delete_subjects(self, indexes: list[int]) -> list[str]:
+        """按索引批量删除，返回被删除的主体名列表。"""
+        valid = sorted({i for i in indexes if 0 <= i < len(self.main_data)})
+        removed = [self.main_data[i]["name"] for i in valid]
+        for index in reversed(valid):
             del self.main_data[index]
+        if removed:
             self._mark_dirty()
             self._save_state()
-            return True
-        return False
+        return removed
+
+    def delete_subject(self, index: int) -> bool:
+        return bool(self.delete_subjects([index]))
 
     def generate_new_password_for_subject(self, index: int) -> tuple[str, str] | None:
-        """为指定主体生成新密码（始终使用 v2）。返回 (密码, 次数)。"""
+        """为指定主体生成新密码（始终 v2）。返回 (密码, 次数)。"""
         if not (0 <= index < len(self.main_data)):
             return None
 
         item = self.main_data[index]
-        spec = parse_rule(item["rule"])
-        if spec is None:
-            return None
+        spec = parse_rule(item["rule"]) or parse_rule(self._default_rule())
+        assert spec is not None
 
         result = self.pwd_generator.generate(
             item["name"],
@@ -357,6 +435,7 @@ class PasswordManagerModel:
             ALGORITHM_V2,
         )
         item["count"] = str(int(item["count"]) + 1)
+        item["updated_at"] = _now()
 
         self._add_to_history(item["name"], item["count"], item["rule"])
         self._mark_dirty()
@@ -382,12 +461,10 @@ class PasswordManagerModel:
 
     # ===================== 历史记录 =====================
     def _add_to_history(self, name: str, count: str, rule_str: str) -> None:
-        self.history_data.setdefault(name, []).insert(
-            0, [count, rule_str, datetime.now().strftime("%Y-%m-%d %H:%M:%S")]
-        )
+        self.history_data.setdefault(name, []).insert(0, [count, rule_str, _now()])
 
     def get_history_for_subject(self, name: str) -> list[tuple[str, str, str]]:
-        """返回 [(密码, 次数, 时间), ...]，兼容两元素的旧历史条目。"""
+        """返回 [(密码, 次数, 时间), ...]，兼容两元素旧条目。"""
         result = []
         for entry in self.history_data.get(name, []):
             count, rule_str = entry[0], entry[1]
@@ -454,7 +531,7 @@ class PasswordManagerModel:
     def get_current_file_path(self) -> str | None:
         return self.current_file_path
 
-    # ===================== 临时备份 =====================
+    # ===================== 备份 =====================
     def create_backup(self, user_key: str, backup_path: str) -> str | None:
         """把当前数据加密写入 backup_path（原子写入）。"""
         try:

@@ -11,7 +11,11 @@ import pytest
 
 pytest.importorskip("PySide6")
 
+from PySide6.QtCore import Qt
 from PySide6.QtWidgets import QApplication  # noqa: E402
+
+import theme
+from table_model import MASK, PASSWORD_ROLE
 
 
 @pytest.fixture(scope="module")
@@ -26,40 +30,66 @@ def controller(app, tmp_path, monkeypatch):
     from controller import PasswordManagerController
 
     instance = PasswordManagerController()
-    instance.view.switch_to_main_interface()  # 真实流程：先解锁/新建，再刷新表格
+    instance.view.switch_to_main_interface()
     return instance
 
 
-def test_masking_and_row_values(controller):
-    controller.model.add_or_update_subject("Google", length=16)
-    controller._refresh_table_from_model()
-    items = controller.view.get_all_row_items()
-    assert len(items) == 1
-    assert items[0].text(1) == "Google"
-    assert items[0].text(2) == "\u2022" * 10  # 默认掩码
-    assert controller.view.get_row_values(items[0])[2]  # 真实密码取得到
+def _display(view, row, column):
+    return view.table_model.data(view.table_model.index(row, column), Qt.ItemDataRole.DisplayRole)
 
-    controller.view.show_passwords_action.setChecked(True)
-    assert items[0].text(2) != "\u2022" * 10  # 显示后为明文
+
+def test_table_masks_passwords_by_default(controller):
+    controller.model.add_or_update_subject("Google", length=16)
+    controller._reload()
+    assert controller.view.table_model.rowCount() == 1
+    assert _display(controller.view, 0, 0) == "Google"
+    assert _display(controller.view, 0, 1) == MASK
+
+    index = controller.view.table_model.index(0, 1)
+    assert controller.view.table_model.data(index, PASSWORD_ROLE) == controller.model.main_data[0]["password"]
+
+    controller.view.set_show_passwords(True)
+    assert _display(controller.view, 0, 1) == controller.model.main_data[0]["password"]
+
+
+def test_empty_state_and_stack(controller):
+    controller._reload()
+    assert controller.view.table_model.rowCount() == 0
+    assert controller.view.stack.currentIndex() == 1
+    controller.model.add_or_update_subject("A")
+    controller._reload()
+    assert controller.view.stack.currentIndex() == 0
 
 
 def test_dirty_marker_in_title(controller):
     controller.view.update_window_title(r"C:\vault\MyVault.sk")
     assert "MyVault.sk" in controller.view.windowTitle()
-    assert "C:\\vault" not in controller.view.windowTitle()  # 不再暴露完整路径
+    assert "C:\\vault" not in controller.view.windowTitle()
     controller.view.set_dirty(True)
     assert controller.view.windowTitle().endswith("*")
-    assert "未保存" in controller.view.dirty_indicator.text()
+    assert controller.view.dirty_indicator.text()
 
 
 def test_live_search_filters_rows(controller):
     controller.model.add_or_update_subject("Google")
     controller.model.add_or_update_subject("GitHub")
-    controller._refresh_table_from_model()
+    controller._reload()
+    assert controller.view.proxy.rowCount() == 2
     controller.view._on_search_changed("git")
-    assert [i.isHidden() for i in controller.view.get_all_row_items()] == [True, False]
+    assert controller.view.proxy.rowCount() == 1
     controller.view._on_search_changed("")
-    assert not any(i.isHidden() for i in controller.view.get_all_row_items())
+    assert controller.view.proxy.rowCount() == 2
+
+
+def test_sorting_by_count(controller):
+    controller.model.add_or_update_subject("A")
+    controller.model.add_or_update_subject("B")
+    controller.model.main_data[0]["count"] = "9"
+    controller.model.main_data[1]["count"] = "1"
+    controller._reload()
+    controller.view.table.sortByColumn(2, Qt.SortOrder.AscendingOrder)
+    first = controller.view.proxy.data(controller.view.proxy.index(0, 0), Qt.ItemDataRole.DisplayRole)
+    assert first == "B"
 
 
 def test_history_window_populates_and_masks(controller):
@@ -71,11 +101,10 @@ def test_history_window_populates_and_masks(controller):
         "A", history, {"copy": noop, "delete": noop, "undo": noop, "redo": noop}
     )
     window = controller.view.history_window
-    assert window is not None
-    assert window.subject_name == "A"
+    assert window is not None and window.subject_name == "A"
     assert window.tree.topLevelItemCount() == 1
-    assert window.tree.topLevelItem(0).text(2)  # 生成时间
-    assert window.tree.topLevelItem(0).text(1) == "\u2022" * 10
+    assert window.tree.topLevelItem(0).text(2)
+    assert window.tree.topLevelItem(0).text(1) == MASK
 
 
 def test_write_current_sets_path_and_clears_dirty(controller, tmp_path):
@@ -86,8 +115,24 @@ def test_write_current_sets_path_and_clears_dirty(controller, tmp_path):
     assert path.exists()
     assert controller.model.current_file_path == str(path)
     assert controller.model.is_dirty() is False
-    assert str(path) not in controller.view.windowTitle()
     assert "vault.sk" in controller.view.windowTitle()
+
+
+def test_clipboard_countdown(controller):
+    controller._copy_to_clipboard_with_timer("secret")
+    assert "30" in controller.view.clipboard_label.text()
+    controller._on_clipboard_tick()
+    assert "29" in controller.view.clipboard_label.text()
+    controller.clipboard_seconds = 1
+    controller._on_clipboard_tick()
+    assert controller.view.clipboard_label.text() == ""
+
+
+def test_theme_applies(controller):
+    controller.view.apply_theme("dark")
+    assert theme.DARK["bg"] in QApplication.instance().styleSheet()
+    controller.view.apply_theme("light")
+    assert theme.LIGHT["bg"] in QApplication.instance().styleSheet()
 
 
 def test_backup_timestamp_handles_underscore_names():
@@ -104,7 +149,6 @@ def test_dialogs_construct(controller):
 
     add = AddSubjectDialog()
     assert add.get_data()[1] == 16
-    assert "预览" in add.preview_label.text()
 
     unlock = UnlockDialog("t", "m", confirm=True)
     unlock.key_edit.setText("abc")
@@ -112,9 +156,11 @@ def test_dialogs_construct(controller):
     assert unlock.key() == "abc"
 
 
-def test_reset_to_initial_clears_table(controller):
-    controller.model.add_or_update_subject("A")
-    controller._refresh_table_from_model()
-    controller.view.reset_to_initial()
-    assert controller.view.work_widget.isVisible() is False
-    assert "密码管理器" == controller.view.windowTitle()
+def test_generate_selected_via_controller(controller):
+    controller.model.add_or_update_subject("A", length=12)
+    controller._reload()
+    controller.view.table.selectRow(0)
+    previous = controller.model.main_data[0]["password"]
+    controller.handle_generate_selected()
+    assert controller.model.main_data[0]["password"] != previous
+    assert controller.model.main_data[0]["count"] == "1"
