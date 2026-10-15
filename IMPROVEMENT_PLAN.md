@@ -172,7 +172,7 @@ v3:<base64( "PMGR" | version(1) | iterations(4) | salt(16) | nonce(12) | tag(16)
 - [x] 在 GitHub 创建公开仓库：**xiesat/password-manager**
 - [x] 首次提交与推送（`main` 分支）
 - [x] 替换仓库地址与作者（README/CONTRIBUTING 指向 xiesat/password-manager，LICENSE 署名 Xiesta）
-- [ ] 打 tag `v0.2.0` 并用 spec 打包上传 Release（附 SHA256）
+- [x] 打 tag `v0.2.0`，用 spec 构建并上传 Release 资源（`PasswordManager.exe` + `SHA256SUMS.txt`）
 - [ ] （可选）代码签名证书
 
 ```bash
