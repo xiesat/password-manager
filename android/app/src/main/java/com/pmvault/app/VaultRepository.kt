@@ -134,37 +134,47 @@ class VaultRepository(private val context: Context) {
         val generated = PasswordGenerator.generateV2(
             name, spec.length, spec.lower, spec.upper, spec.digit, spec.symbol, null,
         )
-        item["password"] = generated.first
-        item["rule"] = PasswordGenerator.buildRule(
+        val count = ((item["count"] as? String)?.toIntOrNull() ?: 0) + 1
+        val rule = PasswordGenerator.buildRule(
             spec.length, spec.lower, spec.upper, spec.digit, spec.symbol, generated.second,
         )
-        val count = ((item["count"] as? String)?.toIntOrNull() ?: 0) + 1
-        item["count"] = count.toString()
-        item["updated_at"] = timestamp()
-        item["hlc"] = current.nextHlc()
 
-        addHistory(name, count.toString(), item["rule"] as? String ?: "")
+        // 关键：替换成**新的 Map 实例**而不是原地改。
+        // 原地修改会让新旧 records 列表「结构相等」，Compose 判定没变化 → 界面不刷新。
+        val updated: Record = LinkedHashMap(item)
+        updated["password"] = generated.first
+        updated["rule"] = rule
+        updated["count"] = count.toString()
+        updated["updated_at"] = timestamp()
+        updated["hlc"] = current.nextHlc()
+        current.records[index] = updated
+
+        addHistory(name, count.toString(), rule)
         current.rev += 1
         persist()
-        return item
+        return updated
     }
 
-    /** 某个主体的历史密码；无法还原的旧格式条目会被跳过。 */
-    fun history(name: String): List<HistoryEntry> {
+    /** 原始历史条目（还没还原出密码），用于逐条计算并汇报进度。 */
+    fun rawHistory(name: String): List<List<Any?>> {
         val current = state ?: return emptyList()
-        val entries = current.history[name] ?: return emptyList()
-        val result = mutableListOf<HistoryEntry>()
-        for (entry in entries) {
-            val row = entry as? List<Any?> ?: continue
-            if (row.size < 2) continue
-            val count = row[0] as? String ?: continue
-            val rule = row[1] as? String ?: continue
-            val time = (row.getOrNull(2) as? String) ?: ""
-            val spec = PasswordGenerator.parseRule(rule) ?: continue
-            val restored = PasswordGenerator.regenerate(name, spec) ?: continue
-            result.add(HistoryEntry(restored, count, time))
+        return (current.history[name] ?: emptyList()).mapNotNull { entry ->
+            (entry as? List<Any?>)?.takeIf { it.size >= 2 }
         }
-        return result
+    }
+
+    /**
+     * 还原**一条**历史密码：一次 20 万次 PBKDF2。
+     * 调用方必须放到后台线程，并据此显示进度。
+     * 无法还原的旧格式条目返回 null。
+     */
+    fun deriveHistoryEntry(name: String, row: List<Any?>): HistoryEntry? {
+        val count = row[0] as? String ?: return null
+        val rule = row[1] as? String ?: return null
+        val time = (row.getOrNull(2) as? String) ?: ""
+        val spec = PasswordGenerator.parseRule(rule) ?: return null
+        val restored = PasswordGenerator.regenerate(name, spec) ?: return null
+        return HistoryEntry(restored, count, time)
     }
 
     private fun addHistory(name: String, count: String, rule: String) {

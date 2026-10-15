@@ -1,7 +1,10 @@
 package com.pmvault.app.ui
 
 import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.compose.foundation.background
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -17,6 +20,7 @@ import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
 import androidx.compose.material3.Checkbox
+import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -26,16 +30,20 @@ import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Scaffold
 import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.TopAppBar
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.foundation.text.KeyboardOptions
@@ -66,25 +74,29 @@ fun VaultApp(viewModel: VaultViewModel) {
             )
         },
     ) { padding ->
-        Column(
-            modifier = Modifier
-                .fillMaxSize()
-                .padding(padding),
-        ) {
-            if (viewModel.locked) {
-                UnlockScreen(viewModel)
-            } else {
-                VaultListScreen(viewModel, onAdd = { showAdd = true })
+        Box(modifier = Modifier.fillMaxSize()) {
+            Column(
+                modifier = Modifier
+                    .fillMaxSize()
+                    .padding(padding),
+            ) {
+                if (viewModel.locked) {
+                    UnlockScreen(viewModel)
+                } else {
+                    VaultListScreen(viewModel, onAdd = { showAdd = true })
+                }
+                if (viewModel.status.isNotEmpty()) {
+                    Text(
+                        text = viewModel.status,
+                        style = MaterialTheme.typography.bodySmall,
+                        modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
+                    )
+                }
             }
+
+            // 耗时计算都在后台线程，这里明确显示"在算"而不是"卡了"
             if (viewModel.busy) {
-                LinearProgressIndicator(modifier = Modifier.fillMaxWidth())
-            }
-            if (viewModel.status.isNotEmpty()) {
-                Text(
-                    text = viewModel.status,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(horizontal = 16.dp, vertical = 6.dp),
-                )
+                BusyOverlay(viewModel.busyMessage)
             }
         }
     }
@@ -94,6 +106,35 @@ fun VaultApp(viewModel: VaultViewModel) {
     }
     if (showSync) {
         SyncDialog(viewModel) { showSync = false }
+    }
+}
+
+/** 全屏遮罩：说明正在做什么，并吃掉点击避免重复触发耗时操作。 */
+@Composable
+private fun BusyOverlay(message: String) {
+    Box(
+        modifier = Modifier
+            .fillMaxSize()
+            .background(Color(0x99000000))
+            .clickable(
+                interactionSource = remember { MutableInteractionSource() },
+                indication = null,
+                onClick = {},
+            ),
+        contentAlignment = Alignment.Center,
+    ) {
+        Surface(shape = MaterialTheme.shapes.medium, tonalElevation = 6.dp) {
+            Column(
+                modifier = Modifier.padding(horizontal = 28.dp, vertical = 24.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+            ) {
+                CircularProgressIndicator()
+                Spacer(Modifier.height(14.dp))
+                Text(message.ifEmpty { "正在处理…" }, style = MaterialTheme.typography.bodyLarge)
+                Spacer(Modifier.height(6.dp))
+                Text("PBKDF2 迭代较慢，请稍候", style = MaterialTheme.typography.bodySmall)
+            }
+        }
     }
 }
 
@@ -209,6 +250,11 @@ private fun EntryDetailDialog(
     val clipboard = LocalClipboardManager.current
     var showHistory by remember { mutableStateOf(false) }
 
+    // 关闭详情页时取消还没算完的历史还原任务，避免继续占 CPU
+    DisposableEffect(Unit) {
+        onDispose { viewModel.clearHistory() }
+    }
+
     val record = viewModel.records.getOrNull(index)
     val name = record?.get("name") as? String ?: ""
     val password = record?.get("password") as? String ?: ""
@@ -232,13 +278,26 @@ private fun EntryDetailDialog(
                     Text(if (showHistory) "收起历史密码" else "查看历史密码")
                 }
                 if (showHistory) {
-                    val history = viewModel.history(name)
-                    Spacer(Modifier.height(6.dp))
-                    if (history.isEmpty()) {
+                    LaunchedEffect(name) { viewModel.loadHistory(name) }
+                    Spacer(Modifier.height(8.dp))
+                    if (viewModel.historyLoading) {
+                        val total = viewModel.historyTotal.coerceAtLeast(1)
+                        LinearProgressIndicator(
+                            progress = { viewModel.historyDone.toFloat() / total },
+                            modifier = Modifier.fillMaxWidth(),
+                        )
+                        Spacer(Modifier.height(6.dp))
+                        Text(
+                            text = "正在还原历史密码 " + viewModel.historyDone + "/" +
+                                viewModel.historyTotal + "（每条要算 20 万次 PBKDF2）",
+                            style = MaterialTheme.typography.bodySmall,
+                        )
+                    }
+                    if (!viewModel.historyLoading && viewModel.historyEntries.isEmpty()) {
                         Text("暂无历史密码", style = MaterialTheme.typography.bodySmall)
                     } else {
                         LazyColumn(modifier = Modifier.heightIn(max = 240.dp)) {
-                            itemsIndexed(history) { _, entry ->
+                            itemsIndexed(viewModel.historyEntries) { _, entry ->
                                 ListItem(
                                     overlineContent = { Text("第 " + entry.count + " 次") },
                                     headlineContent = { Text(entry.password) },

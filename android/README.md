@@ -13,6 +13,7 @@ android/
 ├─ app/                        # Android 应用（Jetpack Compose）
 │  └─ src/main/java/com/pmvault/app/{MainActivity,VaultRepository,VaultViewModel}.kt
 │  └─ src/main/java/com/pmvault/app/ui/VaultApp.kt
+├─ tools/make_icons.py         # 由 resources/app_icon.png 生成启动图标
 ├─ verify-core.sh / verify-core.ps1   # 无需 Android SDK 即可校验 core
 └─ README.md
 ```

@@ -10,6 +10,7 @@ import androidx.lifecycle.viewmodel.initializer
 import androidx.lifecycle.viewmodel.viewModelFactory
 import com.pmvault.core.Record
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -26,17 +27,35 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
     var busy by mutableStateOf(false)
         private set
 
+    /** 当前正在做什么。耗时操作都在 IO 线程，靠它告诉用户"是在算，不是卡住"。 */
+    var busyMessage by mutableStateOf("")
+        private set
+
+    var historyEntries by mutableStateOf<List<VaultRepository.HistoryEntry>>(emptyList())
+        private set
+    var historyLoading by mutableStateOf(false)
+        private set
+    var historyDone by mutableStateOf(0)
+        private set
+    var historyTotal by mutableStateOf(0)
+        private set
+
+    private var historyJob: Job? = null
+
     val vaultId: String? get() = repository.state?.vaultId
     val deviceId: String get() = repository.deviceId
 
     private fun refresh() {
-        records = repository.state?.records?.toList() ?: emptyList()
+        // 拷贝成新的 Map 实例：原地修改会让新旧列表结构相等，Compose 就检测不到变化
+        records = (repository.state?.records ?: emptyList()).map { LinkedHashMap(it) }
         hasVault = repository.exists()
     }
 
-    private fun launchAction(block: suspend () -> String) {
+    private fun launchAction(message: String, block: suspend () -> String) {
+        if (busy) return  // viewModelScope 跑在 Main.immediate，busy 会被同步置位，可挡住连点
         viewModelScope.launch {
             busy = true
+            busyMessage = message
             try {
                 status = withContext(Dispatchers.IO) { block() }
                 refresh()
@@ -44,6 +63,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
                 status = "失败：" + (error.message ?: error.javaClass.simpleName)
             } finally {
                 busy = false
+                busyMessage = ""
             }
         }
     }
@@ -53,7 +73,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
             status = "密钥至少 6 位"
             return
         }
-        launchAction {
+        launchAction("正在创建密码库（PBKDF2 60 万次）…") {
             repository.create(password)
             locked = false
             "已创建新的密码库"
@@ -65,7 +85,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
             status = "请输入密钥"
             return
         }
-        launchAction {
+        launchAction("正在解锁（PBKDF2 60 万次）…") {
             repository.unlock(password)
             locked = false
             "解锁成功"
@@ -73,6 +93,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
     }
 
     fun lock() {
+        clearHistory()
         repository.lock()
         locked = true
         records = emptyList()
@@ -91,7 +112,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
             status = "名称不能为空"
             return
         }
-        launchAction {
+        launchAction("正在生成密码并保存…") {
             repository.addEntry(name.trim(), length, lower, upper, digit, symbol)
             "已添加并生成密码"
         }
@@ -99,20 +120,55 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
 
     /** 重新生成某条记录的密码（次数 +1，旧密码进入历史）。 */
     fun regenerate(index: Int) {
-        launchAction {
+        launchAction("正在重新生成密码并保存（PBKDF2 80 万次）…") {
             repository.regenerate(index)
             "已重新生成密码"
         }
     }
 
-    /** 某条记录的历史密码（同步读取内存状态，无需协程）。 */
-    fun history(name: String): List<VaultRepository.HistoryEntry> = repository.history(name)
-
     fun delete(index: Int) {
-        launchAction {
+        launchAction("正在保存…") {
             repository.deleteEntries(listOf(index))
             "已删除"
         }
+    }
+
+    /**
+     * 逐条还原历史密码。
+     * 每条历史都要跑一次 20 万次 PBKDF2，所以必须离开主线程，并逐条汇报进度。
+     */
+    fun loadHistory(name: String) {
+        historyJob?.cancel()
+        val rows = repository.rawHistory(name)
+        historyEntries = emptyList()
+        historyTotal = rows.size
+        historyDone = 0
+        if (rows.isEmpty()) {
+            historyLoading = false
+            return
+        }
+        historyLoading = true
+        historyJob = viewModelScope.launch {
+            val collected = mutableListOf<VaultRepository.HistoryEntry>()
+            for ((position, row) in rows.withIndex()) {
+                val entry = withContext(Dispatchers.Default) {
+                    repository.deriveHistoryEntry(name, row)
+                }
+                if (entry != null) collected.add(entry)
+                historyEntries = collected.toList()
+                historyDone = position + 1
+            }
+            historyLoading = false
+        }
+    }
+
+    fun clearHistory() {
+        historyJob?.cancel()
+        historyJob = null
+        historyLoading = false
+        historyEntries = emptyList()
+        historyDone = 0
+        historyTotal = 0
     }
 
     /** 从桌面端导入整个密码库（新手机首次使用）。 */
@@ -125,7 +181,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
             status = "请输入桌面端密码库的密钥"
             return
         }
-        launchAction {
+        launchAction("正在下载并解密桌面端的密码库…") {
             val opened = repository.importFromHost(pairingText, password)
             locked = false
             "已从桌面端导入，共 " + opened.records.size + " 条"
@@ -137,7 +193,7 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
             status = "请先扫描或粘贴配对信息"
             return
         }
-        launchAction {
+        launchAction("正在与桌面端同步…") {
             val conflicts = repository.sync(pairingText)
             if (conflicts.isEmpty()) {
                 "同步完成"
