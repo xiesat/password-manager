@@ -1,0 +1,58 @@
+{
+  "spec": "password-manager/generator",
+  "version": 1,
+  "algorithm": "v2",
+  "stream_iterations": 200000,
+  "vectors": [
+    {
+      "input_text": "Google",
+      "salt": "AbC123xyz",
+      "length": 12,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": true,
+      "password": "h[wa.tg|0D[w"
+    },
+    {
+      "input_text": "GitHub",
+      "salt": "Zz9Qq7Ww",
+      "length": 16,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": true,
+      "password": "jn^@5XqljVM41RQf"
+    },
+    {
+      "input_text": "招商银行",
+      "salt": "saltXYZ9",
+      "length": 8,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": false,
+      "password": "fqpIOjv9"
+    },
+    {
+      "input_text": "AWS 控制台",
+      "salt": "OnlyDigits1",
+      "length": 20,
+      "lower": false,
+      "upper": false,
+      "digit": true,
+      "symbol": false,
+      "password": "47719965108864729061"
+    },
+    {
+      "input_text": "emoji🔐site",
+      "salt": "s1",
+      "length": 24,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": true,
+      "password": "2cF]cRI9Qb<d[5WjDLu7>W3z"
+    }
+  ]
+}

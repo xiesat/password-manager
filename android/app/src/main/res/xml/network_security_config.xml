@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  局域网同步使用 HTTP：载荷本身已是 AES-256-GCM 密文，认证由配对令牌 + HMAC 提供。
+  这里仅放行明文流量，且应用只访问用户在同步界面里指定的局域网地址。
+-->
+<network-security-config>
+    <base-config cleartextTrafficPermitted="true" />
+</network-security-config>

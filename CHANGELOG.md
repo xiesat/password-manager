@@ -4,6 +4,24 @@
 
 ## [Unreleased]
 
+## [0.6.0] - 2026-10-15
+
+### 新增（Android 客户端）
+- **@@android/core@@**：纯 Kotlin/JVM 库，实现 v3 加密容器（AES-256-GCM）、schema 4 载荷、
+  三方合并、混合逻辑时钟、局域网同步协议客户端、确定性密码生成器。
+  与 Python 参考实现**逐字节一致**，共 **94 项跨语言检查**全部通过。
+- **@@android/app@@**：Jetpack Compose 界面（解锁 / 列表 / 新增 / 扫码同步），
+  仓库、ViewModel 与平台配置（网络权限、明文流量策略、禁止系统备份）。
+- **@@android/verify-core.sh@@ / @@verify-core.ps1@@**：无需 Android SDK 即可校验 core ——
+  从 Maven Central 拉取 Kotlin 编译器，编译并运行 @@spec/*.json@@ 黄金向量与跨语言加解密夹具。
+- **CI 新增 @@kotlin-core@@ job**：在 ubuntu-latest 上自动跑上述校验，防止两端实现漂移。
+- @@spec/fixtures/@@：Python 生成的跨语言加解密夹具（含非 ASCII 口令与 emoji）。
+- @@spec/generator_vectors.json@@：密码生成器的跨语言向量。
+
+### 修复（由跨语言测试发现）
+- Kotlin 侧 GCM 密文布局：磁盘格式是 **tag || ciphertext**（Python 约定），
+  而 JCE 的 @@doFinal@@ 返回 **ciphertext || tag**。若不转换，两端无法互解 —— 已在实现中显式转换并加测试。
+
 ## [0.5.0] - 2026-10-15
 
 ### 新增（局域网同步，可用）

@@ -131,6 +131,26 @@ set QT_QPA_PLATFORM=offscreen && pytest -q    # Windows
 > 说明：两端必须都安装了本程序并持有同一个库密钥，协议不传输密钥。
 > Windows 首次启动同步会弹出防火墙询问，请选择"专用网络"。
 
+## Android 客户端
+
+[android/](android/) 下是 Kotlin 实现：`core`（加密容器 / schema 4 / 三方合并 / HLC /
+同步协议客户端 / 确定性生成器）与 `app`（Jetpack Compose 界面）。
+
+`core` 与 Python 参考实现**逐字节对齐**，且**不需要 Android SDK** 就能校验：
+
+`@bash
+bash android/verify-core.sh          # Linux / macOS / Git Bash
+`@
+
+`@powershell
+powershell -ExecutionPolicy Bypass -File android\verify-core.ps1
+`@
+
+输出 `checks=94 failures=0 -> ALL KOTLIN CORE CHECKS PASSED`。
+同一套检查也跑在 CI 的 `kotlin-core` job 上。
+
+构建 APK 与使用说明见 [android/README.md](android/README.md)。
+
 ## 项目结构
 
 ```
@@ -149,6 +169,7 @@ set QT_QPA_PLATFORM=offscreen && pytest -q    # Windows
 ├─ sync_service.py          # 局域网同步服务（主机 + 客户端、HMAC 认证）
 ├─ sync_dialog.py           # 同步界面（二维码配对）
 ├─ spec/                    # 跨平台格式/协议规范 + 黄金测试向量
+├─ android/                 # Android 客户端（Kotlin/Compose；core 已通过跨语言向量）
 ├─ storage.py               # 原子写入、%APPDATA% 配置
 ├─ applog.py                # 滚动日志
 ├─ resources/style.qss      # 主题模板（占位符由 theme.py 替换）
