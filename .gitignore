@@ -21,6 +21,8 @@ last_file_config.ini
 config.json
 *.sk
 *.tmp
+# 例外：跨语言加解密夹具需要入库（供 Kotlin 侧校验，内容为测试用假数据）
+!spec/fixtures/*.sk
 .password_manager_backups
 data/
 logs/
