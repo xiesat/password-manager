@@ -135,9 +135,31 @@ class _Handler(BaseHTTPRequestHandler):
     # -- 路由 --
     def do_GET(self) -> None:  # noqa: N802 - BaseHTTPRequestHandler 约定
         if self.path == "/info":
+            # 无需认证：仅用于确认对端与协议版本
             self._respond(200, self.sync_server.info())
-        else:
-            self._respond(404, {"error": "not found"})
+            return
+
+        if self.path == "/vault":
+            # 需要认证：用于新设备"首次加入"，下载整库密文
+            timestamp = self.headers.get("X-PM-Timestamp") or ""
+            nonce = self.headers.get("X-PM-Nonce") or ""
+            signature = self.headers.get("X-PM-Signature")
+            if not self.sync_server.check_auth(
+                timestamp=timestamp, nonce=nonce, signature=signature,
+                method="GET", path=self.path, body=b"",
+            ):
+                self._respond(401, {"error": "unauthorized"})
+                return
+            try:
+                payload = self.sync_server.handle_vault()
+            except Exception as exc:  # noqa: BLE001 - 统一转成 400
+                logger.warning("下载库请求失败：%s", exc)
+                self._respond(400, {"error": str(exc)})
+                return
+            self._respond(200, payload, sign=True)
+            return
+
+        self._respond(404, {"error": "not found"})
 
     def do_POST(self) -> None:  # noqa: N802
         if self.path != "/sync":
@@ -192,8 +214,11 @@ class SyncServer:
         device_name: str = "",
         host: str = "0.0.0.0",
         port: int = DEFAULT_PORT,
+        get_blob: Callable[[], str] | None = None,
     ) -> None:
         self._apply_remote = apply_remote
+        # 供"首次加入"的客户端下载整库密文；None 表示不提供下载
+        self._get_blob = get_blob
         self.vault_id = vault_id
         self.device_id = device_id
         self.device_name = device_name or socket.gethostname()
@@ -300,6 +325,20 @@ class SyncServer:
             "device_name": self.device_name,
         }
 
+    def handle_vault(self) -> dict:
+        """返回本机的整库密文，供新设备首次加入。"""
+        if self._get_blob is None:
+            raise ValueError("主机未开放库下载")
+        blob = self._get_blob()
+        if not blob:
+            raise ValueError("主机尚未解锁或库为空")
+        return {
+            "vault": blob,
+            "vault_id": self.vault_id,
+            "device_id": self.device_id,
+            "device_name": self.device_name,
+        }
+
     def handle_sync(self, request: dict) -> dict:
         remote_blob = str(request.get("vault") or "")
         if not remote_blob:
@@ -355,6 +394,48 @@ class SyncClient:
                 return json.loads(response.read().decode("utf-8"))
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             raise SyncError(f"无法连接主机：{exc}") from exc
+
+    def fetch_vault(self) -> str:
+        """GET /vault：下载主机的整库密文（用于新设备"首次加入"）。"""
+        timestamp = str(int(time.time() * 1000))
+        nonce = secrets.token_hex(16)
+        signature = sign_request(
+            self.auth_key, timestamp=timestamp, nonce=nonce, method="GET", path="/vault", body=b""
+        )
+        request = urllib.request.Request(
+            self._url("/vault"),
+            method="GET",
+            headers={
+                "X-PM-Timestamp": timestamp,
+                "X-PM-Nonce": nonce,
+                "X-PM-Signature": signature,
+            },
+        )
+        try:
+            with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                response_body = response.read()
+                if not verify_signature(
+                    self.auth_key,
+                    response.headers.get("X-PM-Signature"),
+                    timestamp=response.headers.get("X-PM-Timestamp") or "",
+                    nonce=response.headers.get("X-PM-Nonce") or "",
+                    method="RESPONSE",
+                    path="/vault",
+                    body=response_body,
+                ):
+                    raise SyncError("主机响应签名校验失败")
+                result = json.loads(response_body.decode("utf-8"))
+                blob = str(result.get("vault") or "")
+                if not blob:
+                    raise SyncError("主机返回内容为空")
+                return blob
+        except urllib.error.HTTPError as exc:
+            if exc.code == 401:
+                raise SyncError("认证失败：配对令牌不正确或已过期") from exc
+            detail = exc.read().decode("utf-8", errors="ignore")
+            raise SyncError(f"下载失败 {exc.code}：{detail}") from exc
+        except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
+            raise SyncError(f"下载失败：{exc}") from exc
 
     def sync(self, local_blob: str) -> dict:
         body = json.dumps({"vault": local_blob}, ensure_ascii=False).encode("utf-8")

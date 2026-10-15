@@ -1,0 +1,34 @@
+{
+  "spec": "password-manager/sync",
+  "version": 1,
+  "token": "pairing-token-测试-🔐-0123456789",
+  "vault_id": "a1b2c3d4e5f60718293a4b5c6d7e8f90",
+  "auth_info": "pm-sync-auth-v1",
+  "auth_key_hex": "9b0f79e950e0dbacac965c657bffbcbdfb9e461e4e94252bb865a88f2602aeb0",
+  "signatures": [
+    {
+      "timestamp": "1750000000123",
+      "nonce": "0123456789abcdef",
+      "method": "GET",
+      "path": "/vault",
+      "body": "",
+      "signature": "19fa85bf217b551b455bf5e67a7175145086144067fdabcf9dabafb21bfbb705"
+    },
+    {
+      "timestamp": "1750000000456",
+      "nonce": "fedcba9876543210",
+      "method": "POST",
+      "path": "/sync",
+      "body": "{\"vault\":\"v3:AAA\"}",
+      "signature": "1d2f61cbb4a8ef34836d0a47ec5be21392f8329a39348c4c1050bb36dabde4e2"
+    },
+    {
+      "timestamp": "1750000000789",
+      "nonce": "abcdefabcdefabcd",
+      "method": "RESPONSE",
+      "path": "/sync",
+      "body": "{\"vault\":\"v3:BBB\",\"conflicts\":[],\"note\":\"中文与 emoji 🔐\"}",
+      "signature": "61425bbc1b97b6c53410b1183deb055f8a4c3a6662a79038829a42def4b565e9"
+    }
+  ]
+}

@@ -55,8 +55,9 @@ fun VaultApp(viewModel: VaultViewModel) {
             TopAppBar(
                 title = { Text("密码管理器") },
                 actions = {
+                    // 未解锁时也允许打开：新手机需要用它"从桌面端导入"
+                    TextButton(onClick = { showSync = true }) { Text("同步") }
                     if (!viewModel.locked) {
-                        TextButton(onClick = { showSync = true }) { Text("同步") }
                         TextButton(onClick = { viewModel.lock() }) { Text("锁定") }
                     }
                 },
@@ -232,10 +233,12 @@ private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Uni
 
 @Composable
 private fun SyncDialog(viewModel: VaultViewModel, onDismiss: () -> Unit) {
-    var pasted by remember { mutableStateOf("") }
+    var pairingText by remember { mutableStateOf("") }
+    var password by remember { mutableStateOf("") }
+    var confirmImport by remember { mutableStateOf(false) }
 
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result.contents?.let { viewModel.sync(it) }
+        result.contents?.let { pairingText = it }
     }
 
     AlertDialog(
@@ -243,7 +246,8 @@ private fun SyncDialog(viewModel: VaultViewModel, onDismiss: () -> Unit) {
         title = { Text("局域网同步") },
         text = {
             Column {
-                Text("在桌面端打开「同步 → 局域网同步…」，然后扫描它显示的二维码。")
+                Text("1. 桌面端打开「同步 → 局域网同步…」，显示配对二维码。")
+                Text("2. 本机点「扫描二维码」，或把配对信息粘贴到下面。")
                 Spacer(Modifier.height(12.dp))
                 Button(
                     onClick = {
@@ -255,23 +259,72 @@ private fun SyncDialog(viewModel: VaultViewModel, onDismiss: () -> Unit) {
                         scanner.launch(options)
                     },
                 ) { Text("扫描二维码") }
-                Spacer(Modifier.height(12.dp))
+                Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
-                    value = pasted,
-                    onValueChange = { pasted = it },
-                    label = { Text("或粘贴配对信息") },
-                    minLines = 3,
+                    value = pairingText,
+                    onValueChange = { pairingText = it },
+                    label = { Text("配对信息") },
+                    minLines = 2,
+                )
+                Spacer(Modifier.height(8.dp))
+                OutlinedTextField(
+                    value = password,
+                    onValueChange = { password = it },
+                    label = { Text("密码库密钥（导入时用）") },
+                    singleLine = true,
+                    visualTransformation = PasswordVisualTransformation(),
+                    keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password),
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    text = "· 本机已是同一个库 → 点「同步」\n· 新手机首次使用 → 点「从桌面端导入」",
+                    style = MaterialTheme.typography.bodySmall,
                 )
             }
         },
         confirmButton = {
             TextButton(
+                enabled = !viewModel.locked,
                 onClick = {
-                    viewModel.sync(pasted)
+                    viewModel.sync(pairingText)
                     onDismiss()
                 },
-            ) { Text("开始同步") }
+            ) { Text("同步") }
         },
-        dismissButton = { TextButton(onClick = onDismiss) { Text("取消") } },
+        dismissButton = {
+            Row {
+                TextButton(onClick = onDismiss) { Text("取消") }
+                TextButton(
+                    onClick = {
+                        if (viewModel.hasVault) {
+                            confirmImport = true
+                        } else {
+                            viewModel.importFromHost(pairingText, password)
+                            onDismiss()
+                        }
+                    },
+                ) { Text("从桌面端导入") }
+            }
+        },
     )
+
+    if (confirmImport) {
+        AlertDialog(
+            onDismissRequest = { confirmImport = false },
+            title = { Text("确认导入") },
+            text = { Text("导入会用桌面端的密码库替换本机现有的库，本机当前数据将丢失。确定继续？") },
+            confirmButton = {
+                TextButton(
+                    onClick = {
+                        confirmImport = false
+                        viewModel.importFromHost(pairingText, password)
+                        onDismiss()
+                    },
+                ) { Text("确定导入") }
+            },
+            dismissButton = {
+                TextButton(onClick = { confirmImport = false }) { Text("取消") }
+            },
+        )
+    }
 }

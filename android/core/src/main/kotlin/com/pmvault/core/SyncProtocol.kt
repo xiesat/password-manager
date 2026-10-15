@@ -76,45 +76,49 @@ class SyncClient(private val pairing: PairingInfo, private val timeoutMs: Int = 
 
     private val authKey: ByteArray = SyncProtocol.deriveAuthKey(pairing.token, pairing.vaultId)
 
-    fun sync(localBlob: String): String {
-        val body = ("{\"vault\":" + Json.canonical(localBlob) + "}").toByteArray(Charsets.UTF_8)
+    /** 发送已签名的请求，并校验响应签名；返回响应体。 */
+    private fun request(method: String, path: String, body: ByteArray): ByteArray {
         val timestamp = System.currentTimeMillis().toString()
         val nonce = Crypto.hex(Crypto.randomBytes(16))
-        val signature = SyncProtocol.signRequest(authKey, timestamp, nonce, "POST", "/sync", body)
+        val signature = SyncProtocol.signRequest(authKey, timestamp, nonce, method, path, body)
 
-        val url = URL("http://" + pairing.host + ":" + pairing.port + "/sync")
+        val url = URL("http://" + pairing.host + ":" + pairing.port + path)
         val connection = (url.openConnection() as HttpURLConnection).apply {
-            requestMethod = "POST"
+            requestMethod = method
             connectTimeout = timeoutMs
             readTimeout = timeoutMs
-            doOutput = true
-            setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            if (body.isNotEmpty()) {
+                doOutput = true
+                setRequestProperty("Content-Type", "application/json; charset=utf-8")
+            }
             setRequestProperty("X-PM-Timestamp", timestamp)
             setRequestProperty("X-PM-Nonce", nonce)
             setRequestProperty("X-PM-Signature", signature)
         }
 
         return try {
-            connection.outputStream.use { it.write(body) }
+            if (body.isNotEmpty()) connection.outputStream.use { it.write(body) }
             val code = connection.responseCode
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val responseBody = stream?.use { it.readBytes() } ?: ByteArray(0)
-            if (code == 401) throw SyncException("认证失败：配对令牌不正确或已过期")
-            if (code !in 200..299) throw SyncException("主机返回错误 " + code + "：" + String(responseBody, Charsets.UTF_8))
 
-            val responseSignature = connection.getHeaderField("X-PM-Signature")
-            val responseTimestamp = connection.getHeaderField("X-PM-Timestamp") ?: ""
-            val responseNonce = connection.getHeaderField("X-PM-Nonce") ?: ""
+            if (code == 401) throw SyncException("认证失败：配对令牌不正确或已过期")
+            if (code !in 200..299) {
+                throw SyncException("主机返回错误 " + code + "：" + String(responseBody, Charsets.UTF_8))
+            }
             if (!SyncProtocol.verifySignature(
-                    authKey, responseSignature, responseTimestamp, responseNonce,
-                    "RESPONSE", "/sync", responseBody,
+                    authKey,
+                    connection.getHeaderField("X-PM-Signature"),
+                    connection.getHeaderField("X-PM-Timestamp") ?: "",
+                    connection.getHeaderField("X-PM-Nonce") ?: "",
+                    "RESPONSE",
+                    path,
+                    responseBody,
                 )
             ) {
                 throw SyncException("主机响应签名校验失败")
             }
-
-            val json = JSONObject(String(responseBody, Charsets.UTF_8))
-            json.optString("vault", "").ifEmpty { throw SyncException("主机返回内容为空") }
+            responseBody
         } catch (error: SyncException) {
             throw error
         } catch (error: Exception) {
@@ -122,5 +126,18 @@ class SyncClient(private val pairing: PairingInfo, private val timeoutMs: Int = 
         } finally {
             connection.disconnect()
         }
+    }
+
+    /** POST /sync：把本机密文发给主机，取回合并后的整库密文。 */
+    fun sync(localBlob: String): String {
+        val body = ("{\"vault\":" + Json.canonical(localBlob) + "}").toByteArray(Charsets.UTF_8)
+        val json = JSONObject(String(request("POST", "/sync", body), Charsets.UTF_8))
+        return json.optString("vault", "").ifEmpty { throw SyncException("主机返回内容为空") }
+    }
+
+    /** GET /vault：下载主机的整库密文（新设备"首次加入"用）。 */
+    fun fetchVault(): String {
+        val json = JSONObject(String(request("GET", "/vault", ByteArray(0)), Charsets.UTF_8))
+        return json.optString("vault", "").ifEmpty { throw SyncException("主机返回内容为空") }
     }
 }

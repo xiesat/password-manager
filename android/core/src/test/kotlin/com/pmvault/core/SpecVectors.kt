@@ -160,6 +160,39 @@ fun main(args: Array<String>) {
         check("generator random salt", PasswordGenerator.randomSalt(16).length == 16)
     }
 
+    println("== 8. 同步协议签名（跨语言） ==")
+    run {
+        val syncVectors = JSONObject(File(root, "spec/sync_vectors.json").readText(Charsets.UTF_8))
+        val authKey = SyncProtocol.deriveAuthKey(
+            syncVectors.getString("token"),
+            syncVectors.getString("vault_id"),
+        )
+        check("authKey matches", Crypto.hex(authKey) == syncVectors.getString("auth_key_hex"))
+
+        val list = syncVectors.getJSONArray("signatures")
+        for (index in 0 until list.length()) {
+            val entry = list.getJSONObject(index)
+            val body = entry.getString("body").toByteArray(Charsets.UTF_8)
+            val signature = SyncProtocol.signRequest(
+                authKey,
+                entry.getString("timestamp"),
+                entry.getString("nonce"),
+                entry.getString("method"),
+                entry.getString("path"),
+                body,
+            )
+            check("signature#" + index, signature == entry.getString("signature"), signature)
+            check(
+                "verify#" + index,
+                SyncProtocol.verifySignature(
+                    authKey, signature,
+                    entry.getString("timestamp"), entry.getString("nonce"),
+                    entry.getString("method"), entry.getString("path"), body,
+                ),
+            )
+        }
+    }
+
     println("checks=" + checks + " failures=" + failures)
     println(if (failures == 0) "ALL KOTLIN CORE CHECKS PASSED" else "FAILURES: " + failures)
     if (failures > 0) kotlin.system.exitProcess(1)

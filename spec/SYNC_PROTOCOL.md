@@ -67,6 +67,17 @@ auth_key = HKDF-SHA256(ikm = token, salt = vault_id, info = "pm-sync-auth-v1", L
 {"protocol": 1, "vault_id": "...", "device_id": "...", "device_name": "..."}
 `@
 
+### `GET /vault`（需认证）
+用于新设备**首次加入**：下载主机的整库密文。
+签名按 `method="GET", path="/vault", body=空` 计算；响应同样被签名。
+
+`@json
+{"vault": "v3:<base64 整库密文>", "vault_id": "...", "device_id": "...", "device_name": "..."}
+`@
+
+客户端用用户输入的**同一个库密钥**解密后保存为本机库，即完成"加入"。
+主机未开放下载时返回 400；未通过认证返回 401。
+
 ### `POST /sync`
 请求体：
 
@@ -92,6 +103,14 @@ auth_key = HKDF-SHA256(ikm = token, salt = vault_id, info = "pm-sync-auth-v1", L
 ---
 
 ## 5. 谁做合并
+
+### 首次加入（bootstrap）
+
+新设备上还没有库，此时**不能走合并**（空库会被当作"对端删除了所有记录"）。
+正确流程是先用 `GET /vault` 把主机的库**整份下载**下来，再用同一个密钥解密保存，
+之后两端才处于"同一个库"的状态，后续同步才走下面的合并流程。
+
+### 日常同步
 
 **主机做合并**，客户端采用结果：
 

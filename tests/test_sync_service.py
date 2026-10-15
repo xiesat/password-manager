@@ -108,6 +108,7 @@ def make_server(host_model: PasswordManagerModel) -> tuple[SyncServer, list]:
 
     server = SyncServer(
         apply_remote=apply_remote,
+        get_blob=lambda: host_model.encrypt_data(KEY, host_model.prepare_export_data()),
         vault_id=host_model.vault_id,
         device_id=host_model.device_id,
         device_name="desktop-test",
@@ -233,6 +234,59 @@ def test_stale_or_future_timestamp_is_rejected(synced_server, tamper):
     with pytest.raises(urllib.error.HTTPError) as excinfo:
         urllib.request.urlopen(request)
     assert excinfo.value.code == 401
+
+
+# ============================================================ 首次加入（GET /vault）
+def test_vault_download_requires_auth(synced_server):
+    _a, _b, server, _conflicts = synced_server
+    with pytest.raises(urllib.error.HTTPError) as excinfo:
+        urllib.request.urlopen(f"http://127.0.0.1:{server.port}/vault", timeout=10)
+    assert excinfo.value.code == 401
+
+
+def test_vault_download_returns_decryptable_blob(synced_server):
+    a, _b, server, _conflicts = synced_server
+    client = SyncClient(
+        host="127.0.0.1", port=server.port, token=server.token, vault_id=a.vault_id
+    )
+    blob = client.fetch_vault()
+    assert blob.startswith("v3:")
+
+    newcomer = PasswordManagerModel()
+    assert newcomer.detect_and_store(blob)[0] is True
+    assert newcomer.decrypt_with_user_key(KEY) is True
+    newcomer.load_data_from_decrypted_json()
+    assert {r["name"] for r in newcomer.main_data} == {"Base"}
+    assert newcomer.vault_id == a.vault_id
+
+
+def test_vault_download_rejects_wrong_token(synced_server):
+    a, _b, server, _conflicts = synced_server
+    client = SyncClient(
+        host="127.0.0.1", port=server.port, token="wrong-token", vault_id=a.vault_id
+    )
+    with pytest.raises(SyncError):
+        client.fetch_vault()
+
+
+def test_vault_download_disabled_when_host_has_no_blob():
+    a, _b = build_models()
+    server = SyncServer(
+        apply_remote=lambda blob: (blob, []),
+        vault_id=a.vault_id,
+        device_id=a.device_id,
+        host="127.0.0.1",
+        port=0,
+    )
+    server.start()
+    try:
+        client = SyncClient(
+            host="127.0.0.1", port=server.port, token=server.token, vault_id=a.vault_id
+        )
+        with pytest.raises(SyncError):
+            client.fetch_vault()
+    finally:
+        server.stop()
 
 
 # ============================================================ 配对与二维码

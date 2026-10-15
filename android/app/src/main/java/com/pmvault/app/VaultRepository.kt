@@ -136,6 +136,22 @@ class VaultRepository(private val context: Context) {
     }
 
     /**
+     * 首次加入：从桌面端下载整库密文，用 [password] 解密后作为本机库保存。
+     * 注意：会覆盖本机现有的库。
+     */
+    fun importFromHost(pairingText: String, password: String): VaultState {
+        val pairing = PairingInfo.parse(pairingText)
+        val blob = SyncClient(pairing).fetchVault()
+        val payload = VaultPayload.parse(VaultCipher.decrypt(password, blob))
+
+        vaultFile.writeText(blob, Charsets.UTF_8)
+        this.password = password
+        val opened = VaultState.fromPayload(payload, deviceId)
+        this.state = opened
+        return opened
+    }
+
+    /**
      * 与另一台设备（通常是桌面端）同步：
      * 把本机密文发给主机，采用主机返回的合并结果并落盘。
      */

@@ -104,6 +104,23 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
         }
     }
 
+    /** 从桌面端导入整个密码库（新手机首次使用）。 */
+    fun importFromHost(pairingText: String, password: String) {
+        if (pairingText.isBlank()) {
+            status = "请先扫描或粘贴配对信息"
+            return
+        }
+        if (password.isEmpty()) {
+            status = "请输入桌面端密码库的密钥"
+            return
+        }
+        launchAction {
+            val opened = repository.importFromHost(pairingText, password)
+            locked = false
+            "已从桌面端导入，共 " + opened.records.size + " 条"
+        }
+    }
+
     fun sync(pairingText: String) {
         if (pairingText.isBlank()) {
             status = "请先扫描或粘贴配对信息"

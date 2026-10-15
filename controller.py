@@ -111,6 +111,7 @@ class PasswordManagerController(QObject):
 
         server = sync_service.SyncServer(
             apply_remote=self._apply_remote_blob,
+            get_blob=self._export_blob,
             vault_id=self.model.vault_id,
             device_id=self.model.device_id,
             device_name=socket.gethostname(),
@@ -136,6 +137,12 @@ class PasswordManagerController(QObject):
             "copy_id": conflict.copy_id,
             "origin": conflict.origin,
         }
+
+    def _export_blob(self) -> str:
+        """导出本机整库密文（供新设备"首次加入"下载）。"""
+        if not self._session_key:
+            raise ValueError("本机未解锁")
+        return self.model.encrypt_data(self._session_key, self.model.prepare_export_data())
 
     def _apply_remote_blob(self, remote_blob: str) -> tuple[str, list[dict]]:
         """主机侧：解密对端密文 → 合并 → 返回合并后的整库密文（在 HTTP 线程执行）。"""
