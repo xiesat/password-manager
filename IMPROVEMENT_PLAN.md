@@ -168,10 +168,10 @@ v3:<base64( "PMGR" | version(1) | iterations(4) | salt(16) | nonce(12) | tag(16)
 - [x] `.github/PULL_REQUEST_TEMPLATE.md`、`.github/ISSUE_TEMPLATE/bug_report.yml`
 - [x] PyInstaller spec：产物名改 ASCII `PasswordManager.exe`、图标移入 `resources/app_icon.ico`、排除测试依赖
 
-### 待执行（需要你的账号/决定）
-- [ ] 在 GitHub 创建空仓库，`git remote add origin ...`
-- [ ] 首次提交与推送（见下面命令）
-- [ ] 替换 README/CONTRIBUTING 中的 `OWNER/REPO`、LICENSE 中的 `<Your Name>`
+### 发布进度
+- [x] 在 GitHub 创建公开仓库：**xiesat/password-manager**
+- [x] 首次提交与推送（`main` 分支）
+- [x] 替换仓库地址与作者（README/CONTRIBUTING 指向 xiesat/password-manager，LICENSE 署名 Xiesta）
 - [ ] 打 tag `v0.2.0` 并用 spec 打包上传 Release（附 SHA256）
 - [ ] （可选）代码签名证书
 
@@ -179,7 +179,7 @@ v3:<base64( "PMGR" | version(1) | iterations(4) | salt(16) | nonce(12) | tag(16)
 # 首次发布
 git add -A
 git commit -m "feat: v0.2.0 - AES-256-GCM v3 format, secure generator, UI overhaul"
-git remote add origin https://github.com/OWNER/REPO.git
+git remote add origin https://github.com/xiesat/password-manager.git
 git push -u origin main
 git tag v0.2.0 && git push origin v0.2.0
 
