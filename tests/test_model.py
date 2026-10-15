@@ -61,6 +61,21 @@ def test_generate_new_password_increments_count_and_history():
     assert history[0][2]
 
 
+def test_build_rule_uses_python_bool_case():
+    """规则里的布尔必须是 True/False —— Android 端曾写成 true/false，导致两端解析错。"""
+    assert build_rule(12, True, False, True, False, "s", "v2") == "12|True|False|True|False|s|v2"
+
+
+def test_parse_rule_accepts_legacy_lowercase_booleans():
+    """旧版 Android 写过 true/false 的规则，必须仍能正确解析。"""
+    spec = parse_rule("12|true|false|true|false|sAlT|v2")
+    assert spec is not None
+    assert spec["lower"] is True
+    assert spec["upper"] is False
+    assert spec["digit"] is True
+    assert spec["symbol"] is False
+
+
 def test_add_subject_records_first_password_in_history():
     """新增主体时自动生成的首个密码必须进历史（回归测试）。"""
     m = PasswordManagerModel()

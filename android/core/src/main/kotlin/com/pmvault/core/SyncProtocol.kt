@@ -76,6 +76,13 @@ class SyncClient(private val pairing: PairingInfo, private val timeoutMs: Int = 
 
     private val authKey: ByteArray = SyncProtocol.deriveAuthKey(pairing.token, pairing.vaultId)
 
+    /** 从主机返回的 JSON 里取出错误说明；取不到返回 null。 */
+    private fun serverError(body: String): String? = try {
+        JSONObject(body).optString("error", "").ifEmpty { null }
+    } catch (error: Exception) {
+        null
+    }
+
     /** 发送已签名的请求，并校验响应签名；返回响应体。 */
     private fun request(method: String, path: String, body: ByteArray): ByteArray {
         val timestamp = System.currentTimeMillis().toString()
@@ -102,7 +109,12 @@ class SyncClient(private val pairing: PairingInfo, private val timeoutMs: Int = 
             val stream = if (code in 200..299) connection.inputStream else connection.errorStream
             val responseBody = stream?.use { it.readBytes() } ?: ByteArray(0)
 
-            if (code == 401) throw SyncException("认证失败：配对令牌不正确或已过期")
+            if (code == 401) {
+                // 把主机给的说明原样透出来（时间不同步 / 令牌不对 / nonce 重复）
+                throw SyncException(
+                    serverError(String(responseBody, Charsets.UTF_8)) ?: "认证失败：配对令牌不正确"
+                )
+            }
             if (code !in 200..299) {
                 throw SyncException("主机返回错误 " + code + "：" + String(responseBody, Charsets.UTF_8))
             }

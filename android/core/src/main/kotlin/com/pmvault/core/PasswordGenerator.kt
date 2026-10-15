@@ -119,10 +119,22 @@ object PasswordGenerator {
         return parts.joinToString("") to usedSalt
     }
 
-    /** 规则字符串：<len>|<lower>|<upper>|<digit>|<symbol>|<salt>|v2 */
+    /**
+     * 规则字符串：<len>|<lower>|<upper>|<digit>|<symbol>|<salt>|<algorithm>
+     *
+     * 布尔值必须写成 **True/False**（即 Python `str(bool)` 的形式）。
+     * Kotlin 默认的 `true/false` 会让两端都解析成"四个字符类全 False"，
+     * 于是历史密码被还原成另一个串 —— 表现就是"新密码和历史对不上"。
+     */
     fun buildRule(
         length: Int, lower: Boolean, upper: Boolean, digit: Boolean, symbol: Boolean, salt: String,
-    ): String = length.toString() + "|" + lower + "|" + upper + "|" + digit + "|" + symbol + "|" + salt + "|" + ALGORITHM_V2
+    ): String = length.toString() + "|" + boolText(lower) + "|" + boolText(upper) + "|" +
+        boolText(digit) + "|" + boolText(symbol) + "|" + salt + "|" + ALGORITHM_V2
+
+    private fun boolText(value: Boolean): String = if (value) "True" else "False"
+
+    /** 两种大小写都接受：旧版本 Android 写入的是 true/false。 */
+    private fun boolValue(text: String): Boolean = text.equals("true", ignoreCase = true)
 
     /** 解析后的规则（与 Python model.parse_rule 等价）。 */
     data class RuleSpec(
@@ -168,10 +180,10 @@ object PasswordGenerator {
 
         return RuleSpec(
             lengthInt,
-            parts[1] == "True",
-            parts[2] == "True",
-            parts[3] == "True",
-            parts[4] == "True",
+            boolValue(parts[1]),
+            boolValue(parts[2]),
+            boolValue(parts[3]),
+            boolValue(parts[4]),
             salt,
             algorithm,
         )

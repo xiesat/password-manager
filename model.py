@@ -76,10 +76,11 @@ def parse_rule(rule_str: str) -> dict | None:
 
     return {
         "length": length_int,
-        "lower": lower == "True",
-        "upper": upper == "True",
-        "digit": digit == "True",
-        "symbol": symbol == "True",
+        # 大小写都接受：旧版 Android 曾把布尔写成 true/false
+        "lower": lower.lower() == "true",
+        "upper": upper.lower() == "true",
+        "digit": digit.lower() == "true",
+        "symbol": symbol.lower() == "true",
         "salt": salt,
         "algorithm": algorithm,
     }

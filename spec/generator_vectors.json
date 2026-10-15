@@ -159,5 +159,52 @@
       "rule": "8|True|True|True|False|saltXYZ9|v2",
       "password": "fqpIOjv9"
     }
+  ],
+  "build_rule_vectors": [
+    {
+      "length": 12,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": true,
+      "salt": "AbC123xyz",
+      "rule": "12|True|True|True|True|AbC123xyz|v2"
+    },
+    {
+      "length": 16,
+      "lower": false,
+      "upper": false,
+      "digit": true,
+      "symbol": false,
+      "salt": "OnlyDigits1",
+      "rule": "16|False|False|True|False|OnlyDigits1|v2"
+    },
+    {
+      "length": 8,
+      "lower": true,
+      "upper": false,
+      "digit": false,
+      "symbol": true,
+      "salt": "s1",
+      "rule": "8|True|False|False|True|s1|v2"
+    },
+    {
+      "length": 64,
+      "lower": true,
+      "upper": true,
+      "digit": true,
+      "symbol": true,
+      "salt": "sAlT-中文-🔐",
+      "rule": "64|True|True|True|True|sAlT-中文-🔐|v2"
+    },
+    {
+      "length": 20,
+      "lower": false,
+      "upper": true,
+      "digit": false,
+      "symbol": true,
+      "salt": "",
+      "rule": "20|False|True|False|True||v2"
+    }
   ]
 }

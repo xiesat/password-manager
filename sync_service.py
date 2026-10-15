@@ -30,7 +30,9 @@ logger = logging.getLogger(__name__)
 
 PAIRING_PROTOCOL_VERSION = 1
 DEFAULT_PORT = 8765
-REPLAY_WINDOW_MS = 120_000
+# 时间戳允许的偏差。手机时钟常常没有 NTP 同步，2 分钟太紧会直接连不上，
+# 放宽到 5 分钟；重放防护主要靠 nonce 去重（同一窗口内 nonce 只能用一次）。
+REPLAY_WINDOW_MS = 300_000
 NONCE_MIN_LENGTH = 16
 TOKEN_BYTES = 32
 
@@ -63,6 +65,17 @@ def derive_auth_key(token: str, vault_id: str) -> bytes:
 def _signature_message(timestamp: str, nonce: str, method: str, path: str, body: bytes) -> bytes:
     digest = hashlib.sha256(body).hexdigest()
     return f"{timestamp}\n{nonce}\n{method.upper()}\n{path}\n{digest}".encode()
+
+
+def server_error_message(body: str) -> str:
+    """从主机返回的 JSON 里取出错误说明；取不到返回空串。"""
+    try:
+        payload = json.loads(body)
+    except (TypeError, ValueError):
+        return ""
+    if isinstance(payload, dict):
+        return str(payload.get("error") or "")
+    return ""
 
 
 def sign_request(auth_key: bytes, *, timestamp: str, nonce: str, method: str, path: str, body: bytes) -> str:
@@ -144,15 +157,16 @@ class _Handler(BaseHTTPRequestHandler):
             timestamp = self.headers.get("X-PM-Timestamp") or ""
             nonce = self.headers.get("X-PM-Nonce") or ""
             signature = self.headers.get("X-PM-Signature")
-            if not self.sync_server.check_auth(
+            reason = self.sync_server.check_auth(
                 timestamp=timestamp,
                 nonce=nonce,
                 signature=signature,
                 method="GET",
                 path=self.path,
                 body=b"",
-            ):
-                self._respond(401, {"error": "unauthorized"})
+            )
+            if reason:
+                self._respond(401, {"error": reason})
                 return
             try:
                 payload = self.sync_server.handle_vault()
@@ -180,15 +194,16 @@ class _Handler(BaseHTTPRequestHandler):
         nonce = self.headers.get("X-PM-Nonce") or ""
         signature = self.headers.get("X-PM-Signature")
 
-        if not self.sync_server.check_auth(
+        reason = self.sync_server.check_auth(
             timestamp=timestamp,
             nonce=nonce,
             signature=signature,
             method="POST",
             path=self.path,
             body=body,
-        ):
-            self._respond(401, {"error": "unauthorized"})
+        )
+        if reason:
+            self._respond(401, {"error": reason})
             return
 
         try:
@@ -289,36 +304,42 @@ class SyncServer:
 
     def check_auth(
         self, *, timestamp: str, nonce: str, signature: str | None, method: str, path: str, body: bytes
-    ) -> bool:
+    ) -> str | None:
+        """通过返回 None；否则返回**拒绝原因**，由调用方回给客户端。"""
         try:
             sent_ms = int(timestamp)
         except (TypeError, ValueError):
-            return False
-        if abs(time.time() * 1000 - sent_ms) > REPLAY_WINDOW_MS:
-            logger.warning("拒绝：时间戳超出重放窗口")
-            return False
+            return "请求缺少有效的时间戳"
+
+        skew_ms = abs(time.time() * 1000 - sent_ms)
+        if skew_ms > REPLAY_WINDOW_MS:
+            seconds = int(skew_ms / 1000)
+            logger.warning("拒绝：时间戳超出重放窗口，偏差约 %s 秒", seconds)
+            return f"本机与对端时间相差约 {seconds} 秒，请先校准两台设备的系统时间"
+
         if not nonce or len(nonce) < NONCE_MIN_LENGTH:
-            return False
+            return "请求缺少有效的 nonce"
+
+        if not verify_signature(
+            self.auth_key,
+            signature,
+            timestamp=timestamp,
+            nonce=nonce,
+            method=method,
+            path=path,
+            body=body,
+        ):
+            logger.warning("拒绝：签名不匹配")
+            return "配对令牌不正确（签名校验失败），请重新扫码配对"
 
         now = time.time()
         with self._lock:
             self._prune_nonces(now)
             if nonce in self._seen_nonces:
                 logger.warning("拒绝：nonce 重复")
-                return False
-            if not verify_signature(
-                self.auth_key,
-                signature,
-                timestamp=timestamp,
-                nonce=nonce,
-                method=method,
-                path=path,
-                body=body,
-            ):
-                logger.warning("拒绝：签名不匹配")
-                return False
+                return "该请求已处理过（nonce 重复），请重试"
             self._seen_nonces[nonce] = now
-        return True
+        return None
 
     # -- 业务 --
     def info(self) -> dict:
@@ -434,9 +455,10 @@ class SyncClient:
                     raise SyncError("主机返回内容为空")
                 return blob
         except urllib.error.HTTPError as exc:
-            if exc.code == 401:
-                raise SyncError("认证失败：配对令牌不正确或已过期") from exc
             detail = exc.read().decode("utf-8", errors="ignore")
+            if exc.code == 401:
+                message = server_error_message(detail) or "认证失败：配对令牌不正确"
+                raise SyncError(message) from exc
             raise SyncError(f"下载失败 {exc.code}：{detail}") from exc
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             raise SyncError(f"下载失败：{exc}") from exc
@@ -477,7 +499,8 @@ class SyncClient:
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="ignore")
             if exc.code == 401:
-                raise SyncError("认证失败：配对令牌不正确或已过期") from exc
+                message = server_error_message(detail) or "认证失败：配对令牌不正确"
+                raise SyncError(message) from exc
             raise SyncError(f"主机返回错误 {exc.code}：{detail}") from exc
         except (urllib.error.URLError, OSError, json.JSONDecodeError) as exc:
             raise SyncError(f"同步失败：{exc}") from exc

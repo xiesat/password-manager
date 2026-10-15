@@ -256,6 +256,37 @@ fun main(args: Array<String>) {
             }
         }
 
+        // 规则**构建**方向：Kotlin 写出来的规则必须与 Python 逐字符一致
+        val builds = vectors.getJSONArray("build_rule_vectors")
+        for (index in 0 until builds.length()) {
+            val entry = builds.getJSONObject(index)
+            val actual = PasswordGenerator.buildRule(
+                entry.getInt("length"),
+                entry.getBoolean("lower"),
+                entry.getBoolean("upper"),
+                entry.getBoolean("digit"),
+                entry.getBoolean("symbol"),
+                entry.getString("salt"),
+            )
+            check("buildRule#" + index, actual == entry.getString("rule"), actual)
+
+            val spec = PasswordGenerator.parseRule(actual)
+            check(
+                "buildRule roundtrip#" + index,
+                spec != null &&
+                    spec.length == entry.getInt("length") &&
+                    spec.lower == entry.getBoolean("lower") &&
+                    spec.upper == entry.getBoolean("upper") &&
+                    spec.digit == entry.getBoolean("digit") &&
+                    spec.symbol == entry.getBoolean("symbol") &&
+                    spec.salt == entry.getString("salt"),
+            )
+        }
+        check(
+            "legacy lowercase rule still parses",
+            PasswordGenerator.parseRule("12|true|false|true|false|sAlT|v2")?.lower == true,
+        )
+
         val regenerate = vectors.getJSONArray("regenerate_vectors")
         for (index in 0 until regenerate.length()) {
             val entry = regenerate.getJSONObject(index)

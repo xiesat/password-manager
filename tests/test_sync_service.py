@@ -283,6 +283,73 @@ def test_vault_download_disabled_when_host_has_no_blob():
         server.stop()
 
 
+# ============================================================ 认证失败的提示
+def test_check_auth_reports_clock_skew(synced_server):
+    """时钟偏差要给"校准时间"的提示，而不是笼统的认证失败。"""
+    _a, _b, server, _conflicts = synced_server
+    timestamp = str(int(time.time() * 1000) - 900_000)
+    nonce = "a" * 32
+    signature = sign_request(
+        server.auth_key, timestamp=timestamp, nonce=nonce, method="GET", path="/vault", body=b""
+    )
+    reason = server.check_auth(
+        timestamp=timestamp, nonce=nonce, signature=signature, method="GET", path="/vault", body=b""
+    )
+    assert reason is not None
+    assert "时间" in reason
+
+
+def test_check_auth_reports_bad_signature(synced_server):
+    _a, _b, server, _conflicts = synced_server
+    reason = server.check_auth(
+        timestamp=str(int(time.time() * 1000)),
+        nonce="b" * 32,
+        signature="deadbeef",
+        method="GET",
+        path="/vault",
+        body=b"",
+    )
+    assert reason is not None
+    assert "配对令牌" in reason
+
+
+def test_check_auth_accepts_valid_request(synced_server):
+    _a, _b, server, _conflicts = synced_server
+    timestamp = str(int(time.time() * 1000))
+    nonce = "c" * 32
+    signature = sign_request(
+        server.auth_key, timestamp=timestamp, nonce=nonce, method="GET", path="/vault", body=b""
+    )
+    assert (
+        server.check_auth(
+            timestamp=timestamp, nonce=nonce, signature=signature, method="GET", path="/vault", body=b""
+        )
+        is None
+    )
+
+
+def test_skewed_clock_error_reaches_the_client_over_http(synced_server):
+    a, _b, server, _conflicts = synced_server
+    key = derive_auth_key(server.token, a.vault_id)
+    timestamp = str(int(time.time() * 1000) - 900_000)
+    nonce = "d" * 32
+    signature = sign_request(key, timestamp=timestamp, nonce=nonce, method="GET", path="/vault", body=b"")
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.port}/vault",
+        method="GET",
+        headers={
+            "X-PM-Timestamp": timestamp,
+            "X-PM-Nonce": nonce,
+            "X-PM-Signature": signature,
+        },
+    )
+    with pytest.raises(urllib.error.HTTPError) as info:
+        urllib.request.urlopen(request, timeout=10)
+    assert info.value.code == 401
+    payload = json.loads(info.value.read().decode("utf-8"))
+    assert "时间" in payload["error"]
+
+
 # ============================================================ 配对与二维码
 def test_pairing_payload_roundtrip(synced_server):
     a, _b, server, _conflicts = synced_server
