@@ -4,6 +4,16 @@
 
 ## [Unreleased]
 
+## [0.6.3] - 2026-10-15
+
+### 修复
+- CI / Release 的 Android job 不再使用上游已损坏的 `android-actions/setup-android@v3`
+  （它会尝试安装已被移除的 `tools` 包而必然失败），改用 ubuntu-latest 镜像自带的 Android SDK。
+- 构建前 `chmod +x gradlew`，避免 Windows 下提交的脚本在 Linux 上不可执行。
+
+### 新增
+- 发版现在**自动构建并附上 Android debug APK**，与 Windows exe 一起发布。
+
 ## [0.6.2] - 2026-10-15
 
 ### 修复（Android 现在真正可编译、可出包）
