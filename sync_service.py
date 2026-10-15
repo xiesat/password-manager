@@ -67,6 +67,42 @@ def _signature_message(timestamp: str, nonce: str, method: str, path: str, body:
     return f"{timestamp}\n{nonce}\n{method.upper()}\n{path}\n{digest}".encode()
 
 
+def generate_token() -> str:
+    """生成一次配对令牌。
+
+    注意：令牌应该在**一次程序运行内保持稳定** ——
+    如果每打开一次同步窗口就换新令牌，之前发出去的配对信息会立刻作废，
+    手机端就会报"配对令牌不正确（签名校验失败）"。
+    """
+    return secrets.token_urlsafe(TOKEN_BYTES)
+
+
+class NonceStore:
+    """nonce 去重表。
+
+    可以在多次同步窗口之间共享：令牌既然不再每次都轮换，
+    重放防护就必须由 nonce 记忆来承担，而不是靠"窗口一关令牌就失效"。
+    """
+
+    def __init__(self) -> None:
+        self._seen: dict[str, float] = {}
+        self._lock = threading.Lock()
+
+    def _prune(self, now: float) -> None:
+        cutoff = now - (REPLAY_WINDOW_MS / 1000.0)
+        for key in [k for k, t in self._seen.items() if t < cutoff]:
+            del self._seen[key]
+
+    def accept(self, nonce: str, now: float) -> bool:
+        """没见过就记下并返回 True；重复返回 False。"""
+        with self._lock:
+            self._prune(now)
+            if nonce in self._seen:
+                return False
+            self._seen[nonce] = now
+            return True
+
+
 def server_error_message(body: str) -> str:
     """从主机返回的 JSON 里取出错误说明；取不到返回空串。"""
     try:
@@ -234,6 +270,8 @@ class SyncServer:
         host: str = "0.0.0.0",
         port: int = DEFAULT_PORT,
         get_blob: Callable[[], str] | None = None,
+        token: str | None = None,
+        nonces: NonceStore | None = None,
     ) -> None:
         self._apply_remote = apply_remote
         # 供"首次加入"的客户端下载整库密文；None 表示不提供下载
@@ -241,14 +279,14 @@ class SyncServer:
         self.vault_id = vault_id
         self.device_id = device_id
         self.device_name = device_name or socket.gethostname()
-        self.token = secrets.token_urlsafe(TOKEN_BYTES)
+        # token 由调用方传入时会被复用（同一次程序运行内配对信息保持有效）
+        self.token = token or generate_token()
         self.auth_key = derive_auth_key(self.token, vault_id)
         self._host = host
         self._requested_port = port
         self._httpd: ThreadingHTTPServer | None = None
         self._thread: threading.Thread | None = None
-        self._seen_nonces: dict[str, float] = {}
-        self._lock = threading.Lock()
+        self._nonces = nonces or NonceStore()
         self.port: int | None = None
 
     # -- 生命周期 --
@@ -297,11 +335,6 @@ class SyncServer:
         return json.dumps(self.pairing_payload(), ensure_ascii=False, separators=(",", ":"))
 
     # -- 认证 --
-    def _prune_nonces(self, now: float) -> None:
-        cutoff = now - (REPLAY_WINDOW_MS / 1000.0)
-        for key in [k for k, t in self._seen_nonces.items() if t < cutoff]:
-            del self._seen_nonces[key]
-
     def check_auth(
         self, *, timestamp: str, nonce: str, signature: str | None, method: str, path: str, body: bytes
     ) -> str | None:
@@ -332,13 +365,9 @@ class SyncServer:
             logger.warning("拒绝：签名不匹配")
             return "配对令牌不正确（签名校验失败），请重新扫码配对"
 
-        now = time.time()
-        with self._lock:
-            self._prune_nonces(now)
-            if nonce in self._seen_nonces:
-                logger.warning("拒绝：nonce 重复")
-                return "该请求已处理过（nonce 重复），请重试"
-            self._seen_nonces[nonce] = now
+        if not self._nonces.accept(nonce, time.time()):
+            logger.warning("拒绝：nonce 重复")
+            return "该请求已处理过（nonce 重复），请重试"
         return None
 
     # -- 业务 --

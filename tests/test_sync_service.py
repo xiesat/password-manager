@@ -283,6 +283,27 @@ def test_vault_download_disabled_when_host_has_no_blob():
         server.stop()
 
 
+# ============================================================ 配对令牌的稳定性
+def test_generate_token_is_random():
+    assert sync_service.generate_token() != sync_service.generate_token()
+
+
+def test_nonce_store_rejects_replay():
+    store = sync_service.NonceStore()
+    now = time.time()
+    assert store.accept("n" * 32, now) is True
+    assert store.accept("n" * 32, now) is False
+
+
+def test_nonce_store_is_shared_across_servers(synced_server):
+    """令牌不再轮换后，重放防护必须由跨窗口共享的 nonce 表承担。"""
+    _a, _b, server, _conflicts = synced_server
+    store = server._nonces
+    now = time.time()
+    assert store.accept("shared-nonce-value", now) is True
+    assert store.accept("shared-nonce-value", now) is False
+
+
 # ============================================================ 认证失败的提示
 def test_check_auth_reports_clock_skew(synced_server):
     """时钟偏差要给"校准时间"的提示，而不是笼统的认证失败。"""

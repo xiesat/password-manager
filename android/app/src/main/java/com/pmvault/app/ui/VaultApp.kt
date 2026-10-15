@@ -372,12 +372,14 @@ private fun CheckRow(label: String, checked: Boolean, onChange: (Boolean) -> Uni
 
 @Composable
 private fun SyncDialog(viewModel: VaultViewModel, onDismiss: () -> Unit) {
-    var pairingText by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var confirmImport by remember { mutableStateOf(false) }
 
+    // 配对信息存在 ViewModel 里：关掉对话框再打开仍然是上次那段，不用反复扫码
+    val pairingText = viewModel.pairingText
+
     val scanner = rememberLauncherForActivityResult(ScanContract()) { result ->
-        result.contents?.let { pairingText = it }
+        result.contents?.let { viewModel.updatePairingText(it) }
     }
 
     AlertDialog(
@@ -401,7 +403,7 @@ private fun SyncDialog(viewModel: VaultViewModel, onDismiss: () -> Unit) {
                 Spacer(Modifier.height(8.dp))
                 OutlinedTextField(
                     value = pairingText,
-                    onValueChange = { pairingText = it },
+                    onValueChange = { viewModel.updatePairingText(it) },
                     label = { Text("配对信息") },
                     minLines = 2,
                 )

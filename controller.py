@@ -60,6 +60,10 @@ class PasswordManagerController(QObject):
         self._sync_server: sync_service.SyncServer | None = None
         self.sync_applied.connect(self._on_sync_applied)
         self.sync_started.connect(self._on_sync_started)
+        # 同一次运行内保持不变的配对令牌；反复开关同步窗口不会作废已发出的配对信息，
+        # 重放防护改由跨窗口共享的 nonce 表承担。
+        self._sync_token = sync_service.generate_token()
+        self._sync_nonces = sync_service.NonceStore()
 
         self._connect_signals()
         self.view.apply_theme(theme.load_setting())
@@ -111,13 +115,7 @@ class PasswordManagerController(QObject):
             self.view.show_warning(self.tr("提示"), self.tr("请先打开或新建密钥文件"))
             return
 
-        server = sync_service.SyncServer(
-            apply_remote=self._apply_remote_blob,
-            get_blob=self._export_blob,
-            vault_id=self.model.vault_id,
-            device_id=self.model.device_id,
-            device_name=socket.gethostname(),
-        )
+        server = self._make_sync_server()
         try:
             server.start()
         except OSError as exc:
@@ -130,6 +128,23 @@ class PasswordManagerController(QObject):
         finally:
             server.stop()
             self._sync_server = None
+
+    def _make_sync_server(self) -> sync_service.SyncServer:
+        """构造同步服务。
+
+        令牌与 nonce 去重表复用控制器上的实例：**反复开关同步窗口不会换令牌**，
+        否则已经发到手机上的配对信息会在窗口一关之后立刻作废
+        （表现就是"第一次能同步，关掉再进来就报签名校验失败"）。
+        """
+        return sync_service.SyncServer(
+            apply_remote=self._apply_remote_blob,
+            get_blob=self._export_blob,
+            vault_id=self.model.vault_id,
+            device_id=self.model.device_id,
+            device_name=socket.gethostname(),
+            token=self._sync_token,
+            nonces=self._sync_nonces,
+        )
 
     @staticmethod
     def _conflict_dict(conflict) -> dict:

@@ -204,6 +204,33 @@ def test_host_emits_sync_started(controller):
     assert "同步" in messages[0]
 
 
+def test_reopening_sync_window_keeps_pairing_valid(controller):
+    """反复开关同步窗口不能换令牌 —— 否则手机上的配对信息立刻失效（回归测试）。"""
+    first = controller._make_sync_server()
+    second = controller._make_sync_server()
+    assert first.token == second.token
+    assert first.auth_key == second.auth_key
+    assert first.pairing_text() == second.pairing_text()
+
+
+def test_pairing_from_a_closed_window_still_works(controller):
+    """拿第一次窗口的配对信息去连第二次打开的窗口，必须仍然能通过认证。"""
+    first = controller._make_sync_server()
+    first.start()
+    pairing_text = first.pairing_text()
+    first.stop()
+
+    second = controller._make_sync_server()
+    second.start()
+    try:
+        client = sync_service.SyncClient.from_pairing_text(pairing_text)
+        # 关键：这次请求用的令牌是"上一次窗口"发出去的，仍然必须被接受
+        blob = client.fetch_vault()
+        assert blob.startswith("v3:")
+    finally:
+        second.stop()
+
+
 def test_sync_dialog_runs_client_sync_in_background(app, controller, monkeypatch):
     """客户端同步必须异步执行，并给出进度与完成提示。"""
     from PySide6.QtTest import QTest

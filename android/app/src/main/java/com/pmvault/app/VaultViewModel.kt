@@ -40,6 +40,14 @@ class VaultViewModel(private val repository: VaultRepository) : ViewModel() {
     var historyTotal by mutableStateOf(0)
         private set
 
+    /** 上次用过的配对信息：反复同步时不必每次重新扫码。 */
+    var pairingText by mutableStateOf("")
+        private set
+
+    fun updatePairingText(value: String) {
+        pairingText = value
+    }
+
     private var historyJob: Job? = null
 
     // 历史密码缓存：同一条记录 + 库版本没变时直接复用，避免每次打开都重算 20 万次 PBKDF2

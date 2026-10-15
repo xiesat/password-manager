@@ -12,8 +12,8 @@ android {
         applicationId = "com.pmvault.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 9
-        versionName = "0.11.0"
+        versionCode = 10
+        versionName = "0.11.1"
     }
 
     buildFeatures {
