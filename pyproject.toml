@@ -31,6 +31,8 @@ pythonpath = ["."]
 [tool.ruff]
 line-length = 110
 target-version = "py310"
+# 文档里的示例代码块不参与格式化（否则每次改 md 都可能让 CI 失败）
+extend-exclude = ["*.md"]
 
 [tool.ruff.lint]
 select = ["E", "F", "W", "I", "UP", "B"]
