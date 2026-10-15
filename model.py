@@ -459,6 +459,12 @@ class PasswordManagerModel:
         else:
             self.main_data.append(new_item)
 
+        # 自动生成的首个密码同样要进历史，否则"第一次生成的那条"永远查不到。
+        # 注意：显式传入密码（如 CSV 导入）时，规则是随机造出来的、与密码并不对应，
+        # 记进历史会显示一条与真实密码不符的记录，所以那种情况不能记。
+        if not password:
+            self._add_to_history(name, new_item["count"], new_item["rule"])
+
         self._mark_dirty()
         self._save_state()
         return new_item

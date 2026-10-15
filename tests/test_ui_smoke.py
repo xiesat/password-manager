@@ -102,7 +102,8 @@ def test_history_window_populates_and_masks(controller):
     )
     window = controller.view.history_window
     assert window is not None and window.subject_name == "A"
-    assert window.tree.topLevelItemCount() == 1
+    # 新增时的首个密码 + 重新生成的一条
+    assert window.tree.topLevelItemCount() == 2
     assert window.tree.topLevelItem(0).text(2)
     assert window.tree.topLevelItem(0).text(1) == MASK
 

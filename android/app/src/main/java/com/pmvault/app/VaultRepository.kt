@@ -122,6 +122,8 @@ class VaultRepository(private val context: Context) {
         } else {
             current.records.add(record)
         }
+        // 与桌面端一致：自动生成的首个密码也要进历史，否则"第一次生成的那条"查不到
+        addHistory(name, record["count"] as? String ?: "0", record["rule"] as? String ?: "")
         current.rev += 1
         persist()
         return record

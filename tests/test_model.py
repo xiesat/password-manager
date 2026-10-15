@@ -52,10 +52,39 @@ def test_generate_new_password_increments_count_and_history():
     assert result is not None
     assert m.main_data[0]["count"] == "1"
     assert m.main_data[0]["password"] != old
+    # 新增时的首个密码也进了历史，所以这里是 2 条：新密码 + 第一次的密码
+    history = m.get_history_for_subject("A")
+    assert len(history) == 2
+    assert len(history[0]) == 3  # (密码, 次数, 时间)
+    assert history[0][0] == m.main_data[0]["password"]
+    assert history[1][0] == old
+    assert history[0][2]
+
+
+def test_add_subject_records_first_password_in_history():
+    """新增主体时自动生成的首个密码必须进历史（回归测试）。"""
+    m = PasswordManagerModel()
+    item = m.add_or_update_subject("A", length=12)
     history = m.get_history_for_subject("A")
     assert len(history) == 1
-    assert len(history[0]) == 3  # (密码, 次数, 时间)
+    assert history[0][0] == item["password"]
+    assert history[0][1] == item["count"] == "0"
     assert history[0][2]
+
+    old = item["password"]
+    m.generate_new_password_for_subject(0)
+    history = m.get_history_for_subject("A")
+    assert len(history) == 2
+    assert history[0][0] == m.main_data[0]["password"]
+    assert history[1][0] == old
+
+
+def test_explicit_password_is_not_recorded_as_history():
+    """显式给密码（如 CSV 导入）时规则与密码并不对应，不能进历史。"""
+    m = PasswordManagerModel()
+    m.add_or_update_subject("Imported", password="Manual$ecret123")
+    assert m.get_history_for_subject("Imported") == []
+    assert m.history_data.get("Imported") is None
 
 
 def test_add_same_name_updates_in_place():
@@ -98,6 +127,9 @@ def test_delete_subject_and_history_entry():
     m = PasswordManagerModel()
     m.add_or_update_subject("A")
     m.generate_new_password_for_subject(0)
+    assert len(m.get_history_for_subject("A")) == 2
+    assert m.delete_history_entry("A", 0) is True
+    assert len(m.get_history_for_subject("A")) == 1
     assert m.delete_history_entry("A", 0) is True
     assert m.get_history_for_subject("A") == []
     assert m.delete_subject(0) is True
