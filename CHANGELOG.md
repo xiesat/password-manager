@@ -4,6 +4,13 @@
 
 ## [Unreleased]
 
+## [0.6.1] - 2026-10-15
+
+### 修复
+- `.gitignore` 的 `*.sk` 规则把跨语言夹具 `spec/fixtures/cross_language.sk` 也排除了，
+  导致从 v0.6.0 的源码无法复现 Android core 校验。已加入例外并入库。
+- CI 新增的 `kotlin-core` job 恢复全绿：在 ubuntu-latest 上编译 Android core 并跑完 **94 项**跨语言检查。
+
 ## [0.6.0] - 2026-10-15
 
 ### 新增（Android 客户端）
